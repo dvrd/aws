@@ -1,6 +1,6 @@
 # S3 object storage
 
-Saba provides S3 object uploads, deletions, and temporary download URLs. The application owns image processing, authorization, and database relationships. No AWS SDK, external command, or relay is needed at runtime.
+This AWS package provides S3 object uploads, deletions, and temporary download URLs. The application owns image processing, authorization, and database relationships. No AWS SDK, external command, or relay is needed at runtime.
 
 ## Configure AWS
 
@@ -35,3 +35,31 @@ object naming, database relationships, cleanup, and URL refresh behavior.
 `S3_Config.endpoint`, `ca_file`, and `path_style` support isolated HTTPS test peers and compatible endpoints; production configuration uses regional AWS endpoints automatically. Dotted bucket names use path-style URLs to preserve TLS hostname validation.
 
 Signing references: [AWS SigV4 query authentication](https://docs.aws.amazon.com/AmazonS3/latest/developerguide/sigv4-query-string-auth.html), [signed requests](https://docs.aws.amazon.com/IAM/latest/UserGuide/reference_sigv-create-signed-request.html).
+
+## Package dependencies and validation
+
+This package is reusable outside Saba. Vendor `aws`, `files`, `surf`, `http`
+(including `http/v1`), `ascii`, and `websocket` under one shared collection.
+The current Surf package also imports its legacy curl-backed bounded adapter;
+full native method/upload migration is separate work (OKAMI-124). No private
+Mesa helper directories, AWS SDK or application imports are required.
+
+Profile reads use the shared `files.read_limited` implementation: regular files,
+64 KiB maximum, checked before allocation with concurrent-size-change rejection.
+Returned credential strings borrow the operation's scratch allocator storage.
+
+`S3` put/file/delete operations and `ses_send` accept an optional final
+`http_execute: HTTP_Execute` callback. Existing calls retain their default Surf
+execution. Injection permits offline providers while keeping request signing in
+AWS. Configuration struct layouts are unchanged; code storing these operations
+in an explicitly declared procedure type must account for the added parameter.
+
+Run offline tests and an isolated vendored consumer with a supported compiler:
+
+```sh
+odin test shared/aws -thread-count:1 -warnings-as-errors
+ODIN_BIN=/path/to/odin python3 shared/aws/tests/check_consumer.py
+```
+
+Tests use synthetic profiles and an injected HTTP provider; they do not inspect
+real credential files, contact metadata services, send email or write S3 objects.

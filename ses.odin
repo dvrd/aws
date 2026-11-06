@@ -1,6 +1,6 @@
 package aws
 
-import network_client "../client"
+import network_client "../surf"
 import "core:encoding/json"
 import "core:fmt"
 import "core:strings"
@@ -32,8 +32,9 @@ ses_config_valid :: proc(config: SES_Config) -> bool {
 // SES has no idempotency token: ambiguous transport failures can duplicate alerts.
 ses_send :: proc(config: SES_Config, credentials: AWS_Credentials,
 	subject, text: string, now: time.Time,
+	http_execute: HTTP_Execute = network_client.buffered_http_execute,
 ) -> SES_Error {
-	if !ses_config_valid(config) || !aws_credentials_valid(credentials) {return .Invalid_Config}
+	if http_execute == nil || !ses_config_valid(config) || !aws_credentials_valid(credentials) {return .Invalid_Config}
 	if subject == "" || len(subject) > 200 || len(text) == 0 || len(text) > 8192 ||
 	   strings.contains_any(subject, "\r\n\x00") {return .Invalid_Message}
 	message: SES_Message
@@ -46,8 +47,8 @@ ses_send :: proc(config: SES_Config, credentials: AWS_Credentials,
 	host := fmt.tprintf("email.%s.amazonaws.com", config.region)
 	path := "/v2/email/outbound-emails"
 	headers := ses_headers(config.region, credentials, host, s3_timestamp(now), payload)
-	data, result := network_client.buffered_http_execute("POST",
-		fmt.tprintf("https://%s%s", host, path), payload, headers, "", timeout_ms = 15000)
+	data, result := http_execute("POST",
+		fmt.tprintf("https://%s%s", host, path), payload, headers, "", false, 15000, nil, 0)
 	if result.status != 0 && result.status != 200 {return .Rejected}
 	if !result.ok {return .Unavailable}
 	response: struct {MessageId: string}

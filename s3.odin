@@ -1,6 +1,6 @@
 package aws
 
-import network_client "../client"
+import network_client "../surf"
 import files "../files"
 import "core:crypto/hash"
 import "core:crypto/hmac"
@@ -132,7 +132,7 @@ aws_credentials :: proc() -> (credentials: AWS_Credentials, ok: bool) {
 aws_credentials_read_profile :: proc(
 	path, profile: string,
 ) -> (credentials: AWS_Credentials, error: files.Read_Error) {
-	data, read_error := files.read_limited(path, 64 * 1024, context.temp_allocator)
+	data, read_error := files.read_limited(path, 64 * 1024, context.temp_allocator, erase_on_failure=true)
 	if read_error.kind != .None {return {}, read_error}
 	section := ""
 	source := string(data)
@@ -170,14 +170,16 @@ s3_put :: proc(
 	key: string,
 	body: []byte,
 	content_type: string,
+	http_execute: HTTP_Execute = network_client.buffered_http_execute,
 ) -> S3_Result {
-	return s3_object_request(config, credentials, "PUT", key, body, content_type)
+	return s3_object_request(config, credentials, "PUT", key, body, content_type, http_execute=http_execute)
 }
 // Stream a file with a fixed buffer, avoiding an archive-sized allocation.
 s3_put_file :: proc(
 	config: S3_Config,
 	credentials: AWS_Credentials,
 	key, path, content_type: string,
+	http_execute: HTTP_Execute = network_client.buffered_http_execute,
 ) -> S3_Result {
 	file, error := os.open(path)
 	if error != nil do return {}
@@ -206,10 +208,13 @@ s3_put_file :: proc(
 		file,
 		size,
 		string(hex.encode(digest[:], allocator = context.temp_allocator)),
+		http_execute=http_execute,
 	)
 }
-s3_delete :: proc(config: S3_Config, credentials: AWS_Credentials, key: string) -> S3_Result {
-	return s3_object_request(config, credentials, "DELETE", key, nil, "")
+s3_delete :: proc(config: S3_Config, credentials: AWS_Credentials, key: string,
+	http_execute: HTTP_Execute = network_client.buffered_http_execute,
+) -> S3_Result {
+	return s3_object_request(config, credentials, "DELETE", key, nil, "", http_execute=http_execute)
 }
 s3_object_request :: proc(
 	config: S3_Config,
@@ -220,8 +225,9 @@ s3_object_request :: proc(
 	file: ^os.File = nil,
 	file_size: i64 = 0,
 	file_digest: string = "",
+	http_execute: HTTP_Execute = network_client.buffered_http_execute,
 ) -> S3_Result {
-	if !aws_credentials_valid(credentials) || s3_config_error(config) != "" ||
+	if http_execute == nil || !aws_credentials_valid(credentials) || s3_config_error(config) != "" ||
 	   config.bucket == "" || key == "" || strings.contains_any(content_type, "\r\n\x00") {
 		return {}
 	}
@@ -231,15 +237,16 @@ s3_object_request :: proc(
 	headers := s3_object_headers(
 		config, credentials, method, host, path, digest, stamp, content_type,
 	)
-	_, result := network_client.buffered_http_execute(
+	_, result := http_execute(
 		method,
 		fmt.tprintf("%s%s", origin, path),
 		body,
 		headers,
 		config.ca_file,
-		timeout_ms = 120000 if file != nil else 15000,
-		upload_file = file,
-		upload_size = file_size,
+		false,
+		120000 if file != nil else 15000,
+		file,
+		file_size,
 	)
 	return result
 }

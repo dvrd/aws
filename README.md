@@ -63,3 +63,46 @@ ODIN_BIN=/path/to/odin python3 shared/aws/tests/check_consumer.py
 
 Tests use synthetic profiles and an injected HTTP provider; they do not inspect
 real credential files, contact metadata services, send email or write S3 objects.
+
+## Single owner and deterministic signing
+
+AWS is the sole implementation of credential resolution, SigV4, S3 file hashing,
+object requests, presigned URLs and SES signing. `shared:saba/s3` is an optional
+compatibility adapter that delegates here; AWS has no dependency on Saba or its
+server core. Saba core imports no AWS package.
+
+Existing callable signatures are preserved. New `s3_put_at`, `s3_put_file_at`,
+`s3_delete_at` and `s3_download_url_at` take an explicit `time.Time`; they never
+interpret zero as the current time. The existing `s3_download_url(..., now={})`
+retains its zero-means-current-time behavior. Existing file uploads choose their
+signing timestamp after hashing; `_at` file uploads use the caller's exact time.
+All data/configuration/credentials remain caller-owned. Results and generated
+headers/URLs retain their existing scratch-allocation lifetime; this does not add
+credential caching or automatic retries.
+
+`aws_credentials_with_http(execute)` applies the same per-call environment,
+64 KiB profile and ECS/IMDSv2 chain with an explicit `HTTP_Execute` provider.
+`aws_credentials()` retains its exact zero-argument signature and uses Surf.
+The injected provider must preserve the normal bounded response, no-redirect,
+trust and timeout contract; metadata requests are explicitly HTTP with a 1500 ms
+budget and no upload. Incomplete environment or selected profile credentials,
+including a session token without keys, fail closed rather than falling through
+to another provider. Profile open failures retain the prior metadata fallback.
+Returned strings borrow `context.temp_allocator` and must not outlive its storage.
+
+The current executor remains Surf's bounded compatibility adapter, including its
+existing curl dependency. This consolidation does not complete the native-client
+migration or change transport/trust/retry policy.
+
+Additional offline verification:
+
+```sh
+odin test shared/aws -sanitize:address -define:ODIN_TEST_FAIL_ON_BAD_MEMORY=true
+python3 shared/aws/tests/credentials_offline.py --odin /path/to/odin
+```
+
+The credential script starts isolated synthetic environments and files, and calls
+fake ECS/IMDS providers only. The signing fixtures compare public PUT/file PUT,
+DELETE and GET presigning with independently computed Python hashlib/HMAC values;
+HEAD covers the internal generic signing/request seam, not a new public S3 HEAD
+operation. Existing canonical SigV4 and SES regressions remain in the suite.

@@ -1,7 +1,7 @@
 package aws
 
-import network_client "../surf"
 import files "../files"
+import network_client "../surf"
 import "core:crypto/hash"
 import "core:crypto/hmac"
 import "core:encoding/hex"
@@ -47,7 +47,8 @@ s3_config_error :: proc(config: S3_Config) -> string {
 	}
 	if config.endpoint != "" {
 		if !strings.has_prefix(config.endpoint, "https://") ||
-		   strings.contains_any(config.endpoint[8:], "/?#@\r\n") || len(config.endpoint) <= 8 {
+		   strings.contains_any(config.endpoint[8:], "/?#@\r\n") ||
+		   len(config.endpoint) <= 8 {
 			return "S3 endpoint must be an HTTPS origin"
 		}
 	}
@@ -57,12 +58,28 @@ s3_config_error :: proc(config: S3_Config) -> string {
 // Resolve at operation time so rotated role credentials are never retained indefinitely.
 // A configured but incomplete credential source fails closed instead of falling through.
 aws_credentials :: proc() -> (credentials: AWS_Credentials, ok: bool) {
+	return aws_credentials_with_http(network_client.buffered_http_execute)
+}
+
+// Same per-call environment/profile precedence, with metadata HTTP injected for
+// offline providers. Returned strings borrow context.temp_allocator storage.
+aws_credentials_with_http :: proc(
+	http_execute: HTTP_Execute,
+) -> (
+	credentials: AWS_Credentials,
+	ok: bool,
+) {
+	if http_execute == nil {
+		return
+	}
+
 	credentials = {
 		access_key    = os.get_env("AWS_ACCESS_KEY_ID", context.temp_allocator),
 		secret_key    = os.get_env("AWS_SECRET_ACCESS_KEY", context.temp_allocator),
 		session_token = os.get_env("AWS_SESSION_TOKEN", context.temp_allocator),
 	}
-	if credentials.access_key != "" || credentials.secret_key != "" ||
+	if credentials.access_key != "" ||
+	   credentials.secret_key != "" ||
 	   credentials.session_token != "" {
 		return credentials, aws_credentials_valid(credentials)
 	}
@@ -73,8 +90,12 @@ aws_credentials :: proc() -> (credentials: AWS_Credentials, ok: bool) {
 		path = fmt.tprintf("%s/.aws/credentials", os.get_env("HOME", context.temp_allocator))
 	}
 	file_credentials, file_error := aws_credentials_read_profile(path, profile)
-	if file_error.kind != .None && file_error.kind != .Open_Failed {return}
-	if file_credentials.access_key != "" || file_credentials.secret_key != "" {
+	if file_error.kind != .None && file_error.kind != .Open_Failed {
+		return
+	}
+	if file_credentials.access_key != "" ||
+	   file_credentials.secret_key != "" ||
+	   file_credentials.session_token != "" {
 		return file_credentials, aws_credentials_valid(file_credentials)
 	}
 
@@ -85,24 +106,30 @@ aws_credentials :: proc() -> (credentials: AWS_Credentials, ok: bool) {
 		url = fmt.tprintf("http://169.254.170.2%s", relative)
 	} else {
 		if os.get_env("AWS_EC2_METADATA_DISABLED", context.temp_allocator) == "true" do return
-		reply, result := network_client.buffered_http_execute(
+		reply, result := http_execute(
 			"PUT",
 			"http://169.254.169.254/latest/api/token",
 			nil,
 			{"X-aws-ec2-metadata-token-ttl-seconds: 60"},
 			"",
-			allow_http = true, timeout_ms = 1500,
+			true,
+			1500,
+			nil,
+			0,
 		)
 		if !result.ok do return
 		token = string(reply)
 		if token == "" || strings.contains_any(token, "\r\n") do return
-		role, role_result := network_client.buffered_http_execute(
+		role, role_result := http_execute(
 			"GET",
 			"http://169.254.169.254/latest/meta-data/iam/security-credentials/",
 			nil,
 			{fmt.tprintf("X-aws-ec2-metadata-token: %s", token)},
 			"",
-			allow_http = true, timeout_ms = 1500,
+			true,
+			1500,
+			nil,
+			0,
 		)
 		role_name := strings.trim_space(string(role))
 		if !role_result.ok || role_name == "" || strings.contains_any(role_name, "/\r\n?#") {
@@ -115,9 +142,7 @@ aws_credentials :: proc() -> (credentials: AWS_Credentials, ok: bool) {
 	}
 	headers: []string
 	if token != "" do headers = {fmt.tprintf("X-aws-ec2-metadata-token: %s", token)}
-	data, result := network_client.buffered_http_execute(
-		"GET", url, nil, headers, "", allow_http = true, timeout_ms = 1500,
-	)
+	data, result := http_execute("GET", url, nil, headers, "", true, 1500, nil, 0)
 	if !result.ok do return
 	document: struct {
 		access: string `json:"AccessKeyId"`,
@@ -131,26 +156,45 @@ aws_credentials :: proc() -> (credentials: AWS_Credentials, ok: bool) {
 // Profile strings borrow bounded file storage in the operation's scratch arena.
 aws_credentials_read_profile :: proc(
 	path, profile: string,
-) -> (credentials: AWS_Credentials, error: files.Read_Error) {
-	data, read_error := files.read_limited(path, 64 * 1024, context.temp_allocator, erase_on_failure=true)
-	if read_error.kind != .None {return {}, read_error}
+) -> (
+	credentials: AWS_Credentials,
+	error: files.Read_Error,
+) {
+	data, read_error := files.read_limited(
+		path,
+		64 * 1024,
+		context.temp_allocator,
+		erase_on_failure = true,
+	)
+	if read_error.kind != .None {
+		return {}, read_error
+	}
 	section := ""
 	source := string(data)
 	for raw_line in strings.split_iterator(&source, "\n") {
 		line := strings.trim_space(raw_line)
-		if line == "" || line[0] == '#' || line[0] == ';' {continue}
-		if line[0] == '[' && line[len(line)-1] == ']' {
-			section = strings.trim_space(line[1:len(line)-1]); continue
+		if line == "" || line[0] == '#' || line[0] == ';' {
+			continue
 		}
-		if section != profile {continue}
+		if line[0] == '[' && line[len(line) - 1] == ']' {
+			section = strings.trim_space(line[1:len(line) - 1]); continue
+		}
+		if section != profile {
+			continue
+		}
 		equal := strings.index_byte(line, '=')
-		if equal < 1 {continue}
+		if equal < 1 {
+			continue
+		}
 		key := strings.trim_space(line[:equal])
-		value := strings.trim_space(line[equal+1:])
+		value := strings.trim_space(line[equal + 1:])
 		switch key {
-		case "aws_access_key_id": credentials.access_key = value
-		case "aws_secret_access_key": credentials.secret_key = value
-		case "aws_session_token": credentials.session_token = value
+		case "aws_access_key_id":
+			credentials.access_key = value
+		case "aws_secret_access_key":
+			credentials.secret_key = value
+		case "aws_session_token":
+			credentials.session_token = value
 		}
 	}
 	return credentials, {}
@@ -172,13 +216,74 @@ s3_put :: proc(
 	content_type: string,
 	http_execute: HTTP_Execute = network_client.buffered_http_execute,
 ) -> S3_Result {
-	return s3_object_request(config, credentials, "PUT", key, body, content_type, http_execute=http_execute)
+	return s3_put_at(config, credentials, key, body, content_type, time.now(), http_execute)
+}
+
+s3_put_at :: proc(
+	config: S3_Config,
+	credentials: AWS_Credentials,
+	key: string,
+	body: []byte,
+	content_type: string,
+	now: time.Time,
+	http_execute: HTTP_Execute = network_client.buffered_http_execute,
+) -> S3_Result {
+	return s3_object_request_at(
+		config,
+		credentials,
+		"PUT",
+		key,
+		body,
+		content_type,
+		now,
+		http_execute = http_execute,
+	)
 }
 // Stream a file with a fixed buffer, avoiding an archive-sized allocation.
 s3_put_file :: proc(
 	config: S3_Config,
 	credentials: AWS_Credentials,
 	key, path, content_type: string,
+	http_execute: HTTP_Execute = network_client.buffered_http_execute,
+) -> S3_Result {
+	return s3_put_file_internal(
+		config,
+		credentials,
+		key,
+		path,
+		content_type,
+		{},
+		false,
+		http_execute,
+	)
+}
+
+s3_put_file_at :: proc(
+	config: S3_Config,
+	credentials: AWS_Credentials,
+	key, path, content_type: string,
+	now: time.Time,
+	http_execute: HTTP_Execute = network_client.buffered_http_execute,
+) -> S3_Result {
+	return s3_put_file_internal(
+		config,
+		credentials,
+		key,
+		path,
+		content_type,
+		now,
+		true,
+		http_execute,
+	)
+}
+
+@(private)
+s3_put_file_internal :: proc(
+	config: S3_Config,
+	credentials: AWS_Credentials,
+	key, path, content_type: string,
+	now: time.Time,
+	exact_time: bool,
 	http_execute: HTTP_Execute = network_client.buffered_http_execute,
 ) -> S3_Result {
 	file, error := os.open(path)
@@ -198,24 +303,52 @@ s3_put_file :: proc(
 	digest: [32]byte
 	hash.final(&hasher, digest[:])
 	if _, seek_error := os.seek(file, 0, .Start); seek_error != nil do return {}
-	return s3_object_request(
+	instant := now
+	if !exact_time {
+		instant = time.now()
+	}
+	return s3_object_request_at(
 		config,
 		credentials,
 		"PUT",
 		key,
 		nil,
 		content_type,
+		instant,
 		file,
 		size,
 		string(hex.encode(digest[:], allocator = context.temp_allocator)),
-		http_execute=http_execute,
+		http_execute = http_execute,
 	)
 }
-s3_delete :: proc(config: S3_Config, credentials: AWS_Credentials, key: string,
+s3_delete :: proc(
+	config: S3_Config,
+	credentials: AWS_Credentials,
+	key: string,
 	http_execute: HTTP_Execute = network_client.buffered_http_execute,
 ) -> S3_Result {
-	return s3_object_request(config, credentials, "DELETE", key, nil, "", http_execute=http_execute)
+	return s3_delete_at(config, credentials, key, time.now(), http_execute)
 }
+
+s3_delete_at :: proc(
+	config: S3_Config,
+	credentials: AWS_Credentials,
+	key: string,
+	now: time.Time,
+	http_execute: HTTP_Execute = network_client.buffered_http_execute,
+) -> S3_Result {
+	return s3_object_request_at(
+		config,
+		credentials,
+		"DELETE",
+		key,
+		nil,
+		"",
+		now,
+		http_execute = http_execute,
+	)
+}
+
 s3_object_request :: proc(
 	config: S3_Config,
 	credentials: AWS_Credentials,
@@ -227,15 +360,54 @@ s3_object_request :: proc(
 	file_digest: string = "",
 	http_execute: HTTP_Execute = network_client.buffered_http_execute,
 ) -> S3_Result {
-	if http_execute == nil || !aws_credentials_valid(credentials) || s3_config_error(config) != "" ||
-	   config.bucket == "" || key == "" || strings.contains_any(content_type, "\r\n\x00") {
+	return s3_object_request_at(
+		config,
+		credentials,
+		method,
+		key,
+		body,
+		content_type,
+		time.now(),
+		file,
+		file_size,
+		file_digest,
+		http_execute,
+	)
+}
+
+@(private)
+s3_object_request_at :: proc(
+	config: S3_Config,
+	credentials: AWS_Credentials,
+	method, key: string,
+	body: []byte,
+	content_type: string,
+	now: time.Time,
+	file: ^os.File = nil,
+	file_size: i64 = 0,
+	file_digest: string = "",
+	http_execute: HTTP_Execute = network_client.buffered_http_execute,
+) -> S3_Result {
+	if http_execute == nil ||
+	   !aws_credentials_valid(credentials) ||
+	   s3_config_error(config) != "" ||
+	   config.bucket == "" ||
+	   key == "" ||
+	   strings.contains_any(content_type, "\r\n\x00") {
 		return {}
 	}
 	origin, host, path := s3_location(config, key)
-	stamp := s3_timestamp(time.now())
+	stamp := s3_timestamp(now)
 	digest := file_digest if file != nil else s3_sha256(body)
 	headers := s3_object_headers(
-		config, credentials, method, host, path, digest, stamp, content_type,
+		config,
+		credentials,
+		method,
+		host,
+		path,
+		digest,
+		stamp,
+		content_type,
 	)
 	_, result := http_execute(
 		method,
@@ -252,7 +424,8 @@ s3_object_request :: proc(
 }
 
 s3_object_headers :: proc(
-	config: S3_Config, credentials: AWS_Credentials,
+	config: S3_Config,
+	credentials: AWS_Credentials,
 	method, host, path, digest, stamp, content_type: string,
 ) -> []string {
 	canonical_headers := fmt.tprintf(
@@ -313,14 +486,34 @@ s3_download_url :: proc(
 	url: string,
 	ok: bool,
 ) {
-	if !aws_credentials_valid(credentials) || s3_config_error(config) != "" ||
-	   config.bucket == "" || key == "" || expires_seconds < 1 || expires_seconds > 604800 {
+	instant := now
+	if instant == (time.Time{}) {
+		instant = time.now()
+	}
+	return s3_download_url_at(config, credentials, key, expires_seconds, instant)
+}
+
+// Exact time, including time.Time{}; unlike the legacy wrapper zero is not now.
+s3_download_url_at :: proc(
+	config: S3_Config,
+	credentials: AWS_Credentials,
+	key: string,
+	expires_seconds: int,
+	now: time.Time,
+) -> (
+	url: string,
+	ok: bool,
+) {
+	if !aws_credentials_valid(credentials) ||
+	   s3_config_error(config) != "" ||
+	   config.bucket == "" ||
+	   key == "" ||
+	   expires_seconds < 1 ||
+	   expires_seconds > 604800 {
 		return
 	}
 	origin, host, path := s3_location(config, key)
-	instant := now
-	if instant == (time.Time{}) do instant = time.now()
-	stamp := s3_timestamp(instant)
+	stamp := s3_timestamp(now)
 	scope := fmt.tprintf("%s/%s/s3/aws4_request", stamp[:8], config.region)
 	query := fmt.tprintf(
 		"X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=%s&X-Amz-Date=%s&X-Amz-Expires=%d",
@@ -330,7 +523,9 @@ s3_download_url :: proc(
 	)
 	if credentials.session_token != "" {
 		query = fmt.tprintf(
-			"%s&X-Amz-Security-Token=%s", query, s3_encode(credentials.session_token),
+			"%s&X-Amz-Security-Token=%s",
+			query,
+			s3_encode(credentials.session_token),
 		)
 	}
 	query = fmt.tprintf("%s&X-Amz-SignedHeaders=host", query)
@@ -365,10 +560,7 @@ s3_encode :: proc(text: string, keep_slashes := false) -> string {
 			strings.write_byte(&builder, ch)
 		} else {
 			digits := "0123456789ABCDEF"
-			strings.write_byte(
-				&builder,
-				'%',
-			)
+			strings.write_byte(&builder, '%')
 			strings.write_byte(&builder, digits[ch >> 4])
 			strings.write_byte(&builder, digits[ch & 15])
 		}
@@ -381,7 +573,8 @@ s3_sha256 :: proc(data: []byte) -> string {
 	return string(hex.encode(digest[:], allocator = context.temp_allocator))
 }
 s3_signature :: proc(
-	secret, region, stamp, scope, canonical: string, service: string = "s3",
+	secret, region, stamp, scope, canonical: string,
+	service: string = "s3",
 ) -> string {
 	key: [32]byte
 	hmac.sum(

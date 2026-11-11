@@ -10,8 +10,8 @@ The current `shared:aws` package owns credential resolution, SigV4, S3 and SES
 service behavior in `credentials.odin`, `s3.odin` and `ses.odin`. It imports sibling
 `files` for bounded profile reads and `surf` for outbound HTTP; it does not import
 Mesa's private helpers or Saba. The optional `shared:saba/s3` adapter delegates to
-AWS. Surf's legacy bounded curl-backed execution remains a separate transport
-migration, not code owned or reimplemented by AWS.
+AWS. Outbound HTTP calls Surf's native buffered client and does not link libcurl.
+Signing stays here. Async client integration is not part of this package.
 
 Preserve this origin record, existing source notices and repository history when
 copying or upgrading. This extraction/distribution work introduces no new license

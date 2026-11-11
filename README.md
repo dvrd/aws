@@ -1,6 +1,6 @@
 # S3 object storage
 
-This AWS package provides S3 object uploads, deletions, and temporary download URLs. The application owns image processing, authorization, and database relationships. No AWS SDK, external command, or relay is needed at runtime.
+This AWS package provides S3 object uploads, bounded reads, deletions, and temporary download URLs. The application owns image processing, authorization, and database relationships. No AWS SDK, external command, or relay is needed at runtime.
 
 ## Configure AWS
 
@@ -123,3 +123,21 @@ fake ECS/IMDS providers only. The signing fixtures compare public PUT/file PUT,
 DELETE and GET presigning with independently computed Python hashlib/HMAC values;
 HEAD covers the internal generic signing/request seam, not a new public S3 HEAD
 operation. Existing canonical SigV4 and SES regressions remain in the suite.
+
+## Bounded object reads
+
+`s3_get` and exact-time `s3_get_at` sign one GET and return caller-owned bytes.
+Release successful bodies with the allocator passed to the call. The explicit
+body limit may be zero and is capped at 64 MiB; native requests have a 120-second
+maximum. Errors return no body: `.Not_Found` for 404, `.Too_Large` for the byte
+limit, `.Unavailable` for transport/408/429/5xx, and `.Rejected` for redirects or
+other rejected statuses. Invalid configuration or bounds return `.Invalid_Input`
+before executing the request. No automatic redirect or retry occurs.
+
+The optional `S3_Get_Execute` parameter preserves offline provider injection.
+The default `s3_get_native` uses current Surf, verified TLS and system roots; the
+legacy read executor does not accept `S3_Config.ca_file`. Returned temporary
+signing headers still borrow the operation scratch allocator. This read API was
+promoted from Mesa revision `f7f2097` without replacing the canonical credential
+cache or signing implementations. The test suite protects process-wide synthetic environment fixtures with a
+dedicated mutex while retaining the normal parallel test runner.

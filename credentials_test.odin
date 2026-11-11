@@ -30,7 +30,13 @@ Credential_Env_Slot :: struct {
 	found:      bool,
 }
 
+// Environment is process-wide. Hold this across every synthetic test and its
+// workers until pop has restored all keys, so parallel tests cannot mix sources.
+@(private)
+credential_test_env_mutex: sync.Mutex
+
 credential_test_env_push :: proc() -> []Credential_Env_Slot {
+	sync.mutex_lock(&credential_test_env_mutex)
 	saved := make([]Credential_Env_Slot, len(CREDENTIAL_TEST_KEYS))
 	for key, index in CREDENTIAL_TEST_KEYS {
 		value, found := os.lookup_env(key, context.allocator)
@@ -44,6 +50,7 @@ credential_test_env_pop :: proc(saved: []Credential_Env_Slot) {
 	if saved == nil {
 		return
 	}
+	defer sync.mutex_unlock(&credential_test_env_mutex)
 	for slot in saved {
 		if slot.found {
 			os.set_env(slot.key, slot.value)

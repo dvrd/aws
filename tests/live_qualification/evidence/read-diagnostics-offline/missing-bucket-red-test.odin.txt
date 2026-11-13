@@ -1,0 +1,16 @@
+package main
+import aws "shared:aws"
+import "core:mem"
+import "core:testing"
+missing_bucket_get :: proc(_:string,_:[]string,_:i64,_:int,
+ allocator:mem.Allocator)->([]u8,int,aws.S3_Get_Error) {
+ text:="<Error><Code>NoSuchBucket</Code></Error>"
+ body:=make([]u8,len(text),allocator);copy(body,transmute([]u8)text)
+ return body,404,.None
+}
+@(test)
+missing_bucket_must_not_qualify_as_owned_object_absence :: proc(t:^testing.T) {
+ result:=probe(TEST_SCOPE,.Read,TEST_RUN,{access_key="fixture",secret_key="fixture"},
+  {get=missing_bucket_get})
+ testing.expect(t,!result.ok&&result.object==.Unverified)
+}

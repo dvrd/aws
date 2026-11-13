@@ -1,0 +1,56 @@
+{
+  "base": "6e0d2346ad636b6591f9ad869d9a53c678336a1b",
+  "scope": "qualification-only read diagnostics; no SDK public API or runtime changes",
+  "proven_bug": "Old qualification accepted explicit404NoSuchBucket as object absence; exact oldsource red control fails.",
+  "fix": "Thin one-call production native observer adds bounded status/allowlistedcode; qualification NoSuchBucket fails; read/reconcile results remain separate.",
+  "source_sha256": {
+    "tests/live_qualification/default_get_loopback.py": "c5be06f794f4f638e0df58b8148550128ee3b1cabfc206760197700b9b4a214e",
+    "tests/live_qualification/fault_test.odin": "011db2f16112a88e32de198525a1af5968291a3de4e0d60e271046cbddf8a50e",
+    "tests/live_qualification/get_observation.odin": "e330d5f274a4165efeb4b0f0205ea5e40f7632e6bbf24fc6ce68080b81606351",
+    "tests/live_qualification/get_observation_test.odin": "100c11c3f21b60fb19d055000600767c0922caf1cd48dabde90b1bf2912a7b8b",
+    "tests/live_qualification/main.odin": "05f22cc3ddf268592792cf8e314b5ee829b7b9d50dc3c0806660cabddd460864",
+    "tests/live_qualification/observer_loopback.py": "cf2f3c805cd8f16072a72a70f51c976b37b4501766b0be2c35e1887eab745bdc",
+    "tests/live_qualification/probe.odin": "a25361270cf52a2400951395a9c8fc4d445a56d25b5c05219b92418da4370d80",
+    "tests/live_qualification/probe_test.odin": "49687e13ec6db2523fe0dc3416eb1ccb496e331d7aee4c044660fb88719f1210",
+    "tests/live_qualification/run.py": "e047d97ff2b8ad1405636038f0e711e667bf34768b7ed74ed8833a63d757ca14",
+    "tests/live_qualification/test_environment.py": "ac100a185e23ae74d7ddd0f275cc2e68d70f00942791093b09208b2e18bb426c",
+    "tests/live_qualification/test_faults.py": "e02e34793cdd98cd751f6181d3b6815601e58439fe18b7ce5491b2afb3122e21",
+    "tests/live_qualification/test_read_observation.py": "76aae107d7f9c7e54c5a022e39f4c4705aa1205ff83b821832b7352cdf5a397e",
+    "tests/live_qualification/test_runner.py": "b9baab9f2a8085a58bf112d060cb1ac95acb0c1fadcbc3333656776e0c7cf4b6"
+  },
+  "compiler_sha256": "dac83d6eb5faaf9f62cef37297f34a0e21dbe3976a8b8a52c81f3db3d90f0b9c",
+  "native_tests": {
+    "address": 16,
+    "thread": 16,
+    "passed": true
+  },
+  "runner_tests": {
+    "count": 28,
+    "passed": true
+  },
+  "owned_native_loopback": {
+    "passed": true,
+    "connections": 1,
+    "tls_client_hello": true,
+    "stderr_empty": true,
+    "child_reaped": true,
+    "credential_values_used": false
+  },
+  "legacy_json_and_intents_preserved": true,
+  "original_private_campaign_unchanged": true,
+  "request_budgets_unchanged": true,
+  "sdk_public_semantics_unchanged": true,
+  "provider_calls": false,
+  "iam_changes": false,
+  "sessions_issued": false,
+  "live_qualification_complete": false,
+  "logs_gzip_sha256": "c285ad0cf4214179b148306754e6e4ac89caed1e3a347ea0f869a99c54831ec2",
+  "limits": [
+    "Prior temporary-role rejection exact HTTP/XML remain unknown; no propagation/signing cause established.",
+    "Only explicit parsedNoSuchBucket changes qualification404 handling; other404 diagnostics retain existingSDKbasedabsence semantics.",
+    "Unknown/malformed/oversized/unavailable error bodies yield fixedUnknown, never raw strings; existing1024byte bodybound unchanged.",
+    "Ownedloopback proves one actual nativeTLSClientHello, not fullTLS/provider success.",
+    "Legacybinary results accepted without retrofitted diagnostics; future live plan must pin reviewed new diagnosticbinary.",
+    "No new role/session/provider operation authorized or attempted; originalPUT_INTENT remains immutable."
+  ]
+}

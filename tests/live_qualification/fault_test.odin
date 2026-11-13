@@ -56,7 +56,7 @@ aws_fault_redacted :: proc(t: ^testing.T, result: Result) {
  data, error := json.marshal(result, {use_enum_names = true})
  assert(error == nil); defer delete(data)
  testing.expect(t, !strings.contains(string(data), "private-") &&
-  !strings.contains(string(data), "ExpiredToken"))
+  !strings.contains(string(data), "<Error>"))
 }
 
 @(test)

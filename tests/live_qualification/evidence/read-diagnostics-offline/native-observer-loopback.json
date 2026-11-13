@@ -1,0 +1,25 @@
+{
+  "passed": true,
+  "source_sha256": "e330d5f274a4165efeb4b0f0205ea5e40f7632e6bbf24fc6ce68080b81606351",
+  "source_unchanged": true,
+  "provider_calls": false,
+  "credentials_used": false,
+  "native_executor_calls": 1,
+  "owned_connections": 1,
+  "tls_client_hello": true,
+  "stderr_empty": true,
+  "child_reaped": true,
+  "binary_sha256": "bcabe1374cf55e957015dd567879c8c43aad51e4d3a3caa914ac5acf1a2dcdda",
+  "build_command": [
+    "/Users/kakurega/dev/oss/Odin/odin",
+    "build",
+    "/var/folders/dr/rhcpqcds1wqd3824tvjn0f940000gn/T/aws-observer-native-tweew5sf",
+    "-thread-count:1",
+    "-vet",
+    "-warnings-as-errors",
+    "-sanitize:address",
+    "-collection:shared=/Users/kakurega/dev/oss/Odin/shared",
+    "-out:/var/folders/dr/rhcpqcds1wqd3824tvjn0f940000gn/T/aws-observer-native-tweew5sf/probe"
+  ],
+  "limits": "ClientHello and input/trust path only; no successful TLS handshake."
+}

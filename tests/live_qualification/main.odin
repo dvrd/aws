@@ -32,7 +32,8 @@ Result :: struct {
  s3_kind: aws.S3_Get_Error,
  ses_kind: aws.SES_Error,
  put_effect, delete_effect, ses_effect: surf.HTTP_Write_Effect,
- mutation_status: int,
+ mutation_status, read_status: int,
+ read_error_code: S3_Observed_Code,
 }
 
 run_id_valid :: proc(value: string) -> bool {

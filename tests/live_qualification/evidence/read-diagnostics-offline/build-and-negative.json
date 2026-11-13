@@ -1,0 +1,21 @@
+{
+  "returncode": 2,
+  "result": {
+    "schema": 1,
+    "ok": false,
+    "reason": "Invalid_Arguments",
+    "object": "Unverified",
+    "credential_kind": "None",
+    "s3_kind": "None",
+    "ses_kind": "None",
+    "put_effect": "Unknown",
+    "delete_effect": "Unknown",
+    "ses_effect": "Unknown",
+    "mutation_status": 0,
+    "read_status": 0,
+    "read_error_code": "None"
+  },
+  "binary_sha256": "7a0d114f74db48769f176febc60a51be17de51519fd42251a8474739c40775e3",
+  "provider_calls": false,
+  "credential_values_read": false
+}

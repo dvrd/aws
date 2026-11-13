@@ -43,8 +43,9 @@ credential-expiration behavior.
 
 The native sequence performs signed GET, one PUT of fixed synthetic bytes, GET
 plus SHA256/exact-byte verification, one owned DELETE and GET absence checking.
-Live GET uses `aws.s3_get` with its **default native executor**, not an injected
-test replacement. TLS verification stays enabled, redirects/HTTP stay disabled,
+Live GET uses `aws.s3_get` with a thin qualification observer that calls the
+production `aws.s3_get_native` exactly once with the original arguments. It does
+not substitute a test transport or change TLS/trust/request bounds. TLS verification stays enabled, redirects/HTTP stay disabled,
 and private-CA behavior is unchanged. The preserved GET callable still has no
 `ca_file` parameter. No presigned URL, header, credential, response body, resource
 identifier or sender is written to receipts. A read-only missing-object check
@@ -175,3 +176,48 @@ fields and no credential loading/replay from completed or unresolved states.
 These controls do not constitute an actual temporary-role S3 campaign. That live
 criterion remains open until the separately reviewed role plan is authorized and
 its actual evidence is retained; prior S3/SES success receipts remain valid.
+
+
+## Qualification-only read diagnostics
+
+The current native probe adds `read_status` and `read_error_code` to each result.
+The former is the exact executor HTTP status (zero if none arrived). The latter
+is a fixed enum: None, Unknown, NoSuchKey, NoSuchBucket, AccessDenied,
+InvalidAccessKeyId, SignatureDoesNotMatch, ExpiredToken, InvalidToken,
+RequestTimeTooSkewed, AuthorizationHeaderMalformed, SlowDown, RequestTimeout,
+PermanentRedirect, TemporaryRedirect or RequestExpired. No body, header, token,
+resource identifier or provider-controlled error string is retained.
+
+The observer receives the response before the public SDK frees its error body.
+It delegates exactly once to `aws.s3_get_native`; deterministic tests may still
+select an injected executor. The same URL/headers/timeouts/body bounds/allocator
+are forwarded. There is no extra diagnostic GET, retry, HTTP fallback, private CA
+or alternate transport. Classification inspects at most the existing1024-byte
+body bound, silently rejects malformed/duplicate/nested/unsupported error shapes,
+and maps unrecognized content to Unknown. An oversized/unavailable body can still
+leave the HTTP status known while its error-code class remains Unknown.
+
+An explicit NoSuchBucket now fails qualification instead of counting as owned
+object absence, even though the SDK's public404 classification remains Not_Found.
+NoSuchKey remains an absence result. Other404 diagnostics retain the existing
+SDK-based absence semantics; Unknown is not a claim of a specific XML code.
+The proven missing-bucket qualification bug does not establish the cause of the
+previous temporary-role pre-read rejection, whose exact HTTP/XML data was lost.
+
+Runner receipts preserve initial `read_result` separately from last/put/delete/SES
+results, with a separate `reconcile_result` for an explicitly requested read.
+A failed later precondition, malformed child result or unresolved write
+cannot erase that first observation or permit replay. The runner validates the
+numeric status and enum allowlist, rejects contradictory NoSuchBucket success,
+and accepts the legacy native JSON shape without fabricating old diagnostics.
+A new provider plan must pin a newly reviewed diagnostic binary; accepting legacy
+JSON does not retrofit metadata into the historical unchanged binary.
+
+Offline controls cover a real SDK sequence with a public1824-byte synthetic token,
+404 then403 on the same URL, zero writes, NoSuchBucket failure, allowed/unknown
+code redaction, exact callback arguments and no second native invocation. The
+owned loopback helper checks that the production delegate still reaches native
+TLS ClientHello once and retires; it does not complete a TLS handshake or call a
+provider. These checks do not authorize another role/session or replay the retained
+PUT_INTENT. The single approved role session was consumed and its role/policy
+cleanup confirmed; another live campaign needs a separate reviewed authorization.

@@ -128,3 +128,50 @@ error rather than retaining provider XML/error-code bodies; fixture XML must not
 be relabelled as observed AWS `ExpiredToken` evidence. Live S3/SES success receipts
 remain separate. Deliberate throttling load, IAM grants and new infrastructure are
 outside this campaign.
+
+## Explicit temporary-role environment mode
+
+For a separately approved scratch-role campaign, the private resource plan may
+select `"credential_source": "environment"` and an exact
+`"expected_role_arn": "arn:aws:iam::123456789012:role/webtools-qualification-s3"`.
+The example account is synthetic; the role's account must equal the plan's
+`expected_account`. This mode accepts a role name without an IAM path. The
+`profile` field may be omitted and is ignored when environment mode is selected.
+Omitting `credential_source` preserves the existing profile-export path.
+
+Planning remains local and reads no credential values. It writes a private0600
+`credential-policy.json`, hashes that policy into the original state, and keeps
+the native probe's existing nine-field `scope.json` schema unchanged. Changing or
+inserting an unbound policy is refused. Historical profile plans and COMPLETE or
+unresolved intent states are not upgraded or reset automatically.
+
+The operator must obtain any approved temporary credentials separately, in process
+memory, then provide `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`,
+`AWS_SESSION_TOKEN` and ISO8601 `AWS_CREDENTIAL_EXPIRATION` to the runner process.
+The runner never calls AssumeRole or issues/renews a session. All three credential
+strings are required and bounded. A timezone-aware expiration must exceed the
+existing180-second campaign budget; missing/near-expiry credentials stop before
+any CLI or native action. No credential or expiration value is persisted or logged.
+
+Before a native S3/SES action, the runner invokes the official AWS CLI
+`sts get-caller-identity` with **that exact triple**, no `--profile`, no ambient
+profile/endpoint override, and config/credential files disabled for that child.
+The existing thirty-second child bound and overall180-second deadline remain.
+It verifies the account and a literal exact role-name match in an STS assumed-role
+ARN; an IAM-user ARN, wrong role/account, late result or changed policy fails
+before native execution. It rechecks that credentials cover the remaining budget.
+This is identity verification, not a new session issuance or an expiration test.
+
+Only a safe successful attestation is added to state/receipts: principal type,
+role match, session present, expiry guard and SHA256 of the expected role ARN.
+Raw principal ARN, session name, expiration, keys and provider response bodies are
+not receipt fields. Existing write-intent/reconciliation/no-replay rules remain.
+
+`test_environment.py` uses only synthetic keys, temporary state and an owned fake
+CLI executable. It proves exact child arguments/environment, valid role before
+native work, refusal of wrong role/IAM user/account, missing token/near expiry,
+policy binding, literal role-name matching, late identity refusal, safe receipt
+fields and no credential loading/replay from completed or unresolved states.
+These controls do not constitute an actual temporary-role S3 campaign. That live
+criterion remains open until the separately reviewed role plan is authorized and
+its actual evidence is retained; prior S3/SES success receipts remain valid.

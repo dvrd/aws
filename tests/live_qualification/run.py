@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Finite native AWS qualification with explicit scratch resources and durable intent.
 
-Credential export and STS verification use the selected AWS CLI profile in memory;
+Credentials come from the selected profile or an explicitly planned temporary environment;
 S3/SES operations use the Odin bindings. No keys, provider bodies or URLs are logged.
 """
 import argparse
@@ -129,14 +129,58 @@ def scope_valid(scope):
     return scope
 
 
+def credential_policy(resource, account):
+    source = resource.get('credential_source', 'profile')
+    if source == 'profile' and 'expected_role_arn' not in resource:
+        return None
+    role = resource.get('expected_role_arn')
+    pattern = r'arn:aws:iam::' + re.escape(account) + r':role/[A-Za-z0-9_+=,.@-]{1,64}'
+    if source != 'environment' or not isinstance(role, str) or not re.fullmatch(pattern, role):
+        raise Failure('CREDENTIAL_POLICY_INVALID')
+    return dict(schema=1, credential_source=source, expected_role_arn=role)
+
+
+def bound_credential_scope(args, state, scope):
+    path = args.state_dir/'credential-policy.json'
+    expected = state.get('credential_policy_sha256')
+    if expected is None:
+        if path.exists() or path.is_symlink(): raise Failure('UNBOUND_CREDENTIAL_POLICY')
+        return scope
+    policy = read(path)
+    if hashlib.sha256(path.read_bytes()).hexdigest() != expected:
+        raise Failure('CREDENTIAL_POLICY_CHANGED')
+    if set(policy) != {'schema', 'credential_source', 'expected_role_arn'} or \
+            type(policy['schema']) is not int or policy['schema'] != 1:
+        raise Failure('CREDENTIAL_POLICY_INVALID')
+    validated = credential_policy(policy, scope['expected_account'])
+    if validated is None: raise Failure('CREDENTIAL_POLICY_INVALID')
+    return {**scope, **{key: policy[key] for key in ('credential_source', 'expected_role_arn')}}
+
+
+def safe_attestation(value):
+    expected = {'principal_type', 'role_match', 'session_present', 'expiry_guard',
+                'expected_role_arn_sha256'}
+    required_true = ('role_match', 'session_present', 'expiry_guard')
+    if not isinstance(value, dict) or set(value) != expected or \
+            value['principal_type'] != 'AssumedRole' or \
+            any(value[key] is not True for key in required_true) or \
+            not isinstance(value['expected_role_arn_sha256'], str) or \
+            not re.fullmatch(r'[0-9a-f]{64}', value['expected_role_arn_sha256']):
+        raise Failure('ROLE_ATTESTATION_INVALID')
+    return value
+
+
 def receipt(directory, state, reason=None):
     result = {key: state[key] for key in ('run_id', 'scope_sha256', 'binary_sha256', 'phase')}
     result.update(schema=1, qualified=state['phase'] == 'COMPLETE',
                   s3_qualified=state.get('s3_qualified', False), secrets_logged=False,
                   ses_selected=state['allow_ses'])
     if reason: result['reason'] = reason
-    for key in ('last_result', 'put_result', 'delete_result', 'ses_result'):
-        if key in state: result[key] = state[key]
+    for key in ('last_result', 'put_result', 'delete_result', 'ses_result',
+                'credential_attestation'):
+        if key in state:
+            result[key] = (safe_attestation(state[key])
+                           if key == 'credential_attestation' else state[key])
     atomic(directory, 'receipt.json', result)
     return result
 
@@ -147,20 +191,27 @@ def plan(args):
             resource.get('phase') != 'READY' or resource.get('public_access_block_verified') is not True or
             resource.get('encryption') != 'AES256'):
         raise Failure('RESOURCES_NOT_READY')
+    policy = credential_policy(resource, resource['expected_account'])
     scope = {'schema': 1, **{name: resource[name] for name in
-             ('bucket', 'region', 'prefix', 'profile', 'expected_account')},
+             ('bucket', 'region', 'prefix', 'expected_account')},
+             'profile': 'environment' if policy else resource['profile'],
              'allow_write': args.allow_write, 'allow_ses': bool(args.ses_sender), 'ses_sender': args.ses_sender}
     if args.ses_sender and not args.ses_identity_verified: raise Failure('VERIFIED_SES_IDENTITY_REQUIRED')
     scope_valid(scope)
     digest = binary_hash(args.binary)
     with locked(args.state_dir):
-        if (args.state_dir/'state.json').exists() or (args.state_dir/'scope.json').exists():
+        if any((args.state_dir/name).exists() or (args.state_dir/name).is_symlink()
+               for name in ('state.json', 'scope.json', 'credential-policy.json')):
             raise Failure('RUN_ALREADY_EXISTS')
         atomic(args.state_dir, 'scope.json', scope)
         state = {'schema': 1, 'run_id': secrets.token_hex(16), 'phase': 'PREPARED',
                  'scope_sha256': hashlib.sha256((args.state_dir/'scope.json').read_bytes()).hexdigest(),
                  'binary': str(args.binary), 'binary_sha256': digest,
                  'allow_ses': scope['allow_ses'], 's3_qualified': False}
+        if policy:
+            atomic(args.state_dir, 'credential-policy.json', policy)
+            state['credential_policy_sha256'] = hashlib.sha256(
+                (args.state_dir/'credential-policy.json').read_bytes()).hexdigest()
         atomic(args.state_dir, 'state.json', state)
         return receipt(args.state_dir, state)
 
@@ -188,11 +239,65 @@ def capture(argv, env, deadline, limit=MAX_BYTES):
         child.wait(timeout=5); child.stdout.close()
 
 
+class VerifiedEnvironment(dict):
+    def __init__(self, environment, attestation):
+        super().__init__(environment)
+        self.attestation = attestation
+
+
+def temporary_environment(base):
+    env = {key: base[key] for key in ('PATH', 'LANG', 'LC_ALL', 'TMPDIR') if key in base}
+    for key, bound in [('AWS_ACCESS_KEY_ID', 128), ('AWS_SECRET_ACCESS_KEY', 256),
+                       ('AWS_SESSION_TOKEN', 8192)]:
+        value = os.environ.get(key, '')
+        if not value or len(value) > bound or any(not 33 <= ord(c) <= 126 for c in value):
+            raise Failure('TEMPORARY_CREDENTIALS_REQUIRED')
+        env[key] = value
+    try:
+        value = os.environ['AWS_CREDENTIAL_EXPIRATION']
+        if len(value) > 64: raise ValueError()
+        expiry = datetime.datetime.fromisoformat(value.replace('Z', '+00:00'))
+        if expiry.tzinfo is None: raise ValueError()
+    except (KeyError, TypeError, ValueError):
+        raise Failure('TEMPORARY_EXPIRATION_REQUIRED') from None
+    if expiry.timestamp() <= time.time()+TOTAL_SECONDS:
+        raise Failure('CREDENTIALS_NEAR_EXPIRY')
+    env.update(AWS_EC2_METADATA_DISABLED='true', AWS_CONFIG_FILE=os.devnull,
+               AWS_SHARED_CREDENTIALS_FILE=os.devnull)
+    return env, expiry.timestamp()
+
+
+def environment_credentials(executable, scope, base, deadline):
+    env, expiry = temporary_environment(base)
+    env['AWS_REGION'] = scope['region']
+    code, data = capture([str(executable), 'sts', 'get-caller-identity',
+        '--region', scope['region'], '--output', 'json', '--no-cli-pager'], env,
+        min(deadline, time.monotonic()+30))
+    identity = decode(data) if code == 0 else None
+    role = scope['expected_role_arn']
+    if not isinstance(identity, dict) or identity.get('Account') != scope['expected_account']:
+        raise Failure('ACCOUNT_NOT_VERIFIED')
+    name = role.rsplit('/', 1)[1]
+    assumed = ('arn:aws:sts::' + scope['expected_account'] + ':assumed-role/' + re.escape(name) +
+               r'/[A-Za-z0-9_+=,.@-]{2,64}')
+    if not isinstance(identity.get('Arn'), str) or not re.fullmatch(assumed, identity['Arn']):
+        raise Failure('EXPECTED_ROLE_NOT_VERIFIED')
+    if time.monotonic() >= deadline: raise Failure('CAMPAIGN_DEADLINE')
+    if expiry <= time.time()+max(0, deadline-time.monotonic()):
+        raise Failure('CREDENTIALS_NEAR_EXPIRY')
+    safe = dict(principal_type='AssumedRole', role_match=True, session_present=True,
+                expiry_guard=True,
+                expected_role_arn_sha256=hashlib.sha256(role.encode()).hexdigest())
+    return VerifiedEnvironment(env, safe)
+
+
 def credentials(args, scope, deadline):
     executable = args.aws_cli or shutil.which('aws')
     if not executable: raise Failure('AWS_CLI_REQUIRED')
     base = {key: os.environ[key] for key in ('PATH', 'HOME', 'USER', 'LOGNAME', 'LANG', 'LC_ALL', 'TMPDIR') if key in os.environ}
     base['AWS_EC2_METADATA_DISABLED'] = 'true'
+    if scope.get('credential_source') == 'environment':
+        return environment_credentials(executable, scope, base, deadline)
     code, data = capture([str(executable), 'configure', 'export-credentials', '--format', 'process',
                           '--profile', scope['profile']], base, min(deadline, time.monotonic()+30))
     if code: raise Failure('CREDENTIAL_EXPORT_FAILED')
@@ -285,7 +390,16 @@ def run(args, launcher=native, credential_loader=credentials):
                      'cleanup': ('PUT_VERIFIED',), 'send': ('S3_COMPLETE',)}
         if state['phase'] not in permitted.get(args.command, ()): raise Failure('RUN_REQUIRES_REVIEW')
         deadline = time.monotonic()+TOTAL_SECONDS
-        env = credential_loader(args, scope, deadline)
+        credential_scope = bound_credential_scope(args, state, scope)
+        env = credential_loader(args, credential_scope, deadline)
+        if credential_scope.get('credential_source') == 'environment':
+            if not isinstance(env, VerifiedEnvironment): raise Failure('ROLE_ATTESTATION_REQUIRED')
+            safe = safe_attestation(env.attestation)
+            if safe['expected_role_arn_sha256'] != hashlib.sha256(
+                    credential_scope['expected_role_arn'].encode()).hexdigest():
+                raise Failure('ROLE_ATTESTATION_INVALID')
+            state['credential_attestation'] = safe
+            atomic(args.state_dir, 'state.json', state)
         if args.command == 'reconcile':
             value = launcher(args, state, 'reconcile', env, deadline)
             if value['ok'] and value['object'] == 'Owned' and state['phase'] != 'DELETE_INTENT':

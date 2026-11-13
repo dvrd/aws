@@ -1,0 +1,49 @@
+package main
+import aws "shared:aws"
+import surf "shared:surf"
+import "core:fmt"
+import "core:mem"
+import "core:os"
+import "core:strings"
+import "core:testing"
+
+Offline_Sequence :: struct {t:^testing.T, gets,writes:int, token:string, url:string}
+offline_get :: proc(url:string,headers:[]string,_:i64,_:int,
+ allocator:mem.Allocator)->([]u8,int,aws.S3_Get_Error) {
+ s:=cast(^Offline_Sequence)context.user_ptr;s.gets+=1
+ if s.gets==1 {s.url=strings.clone(url)} else {testing.expect_value(s.t,url,s.url)}
+ token_seen:=false
+ for header in headers {
+  if strings.has_prefix(header,"x-amz-security-token: ") {
+   token_seen=header[len("x-amz-security-token: "):]==s.token
+  }
+ }
+ testing.expect(s.t,token_seen,"exact synthetic long token survives signer/header lifetime")
+ if s.gets==1 {return nil,404,.None}
+ raw:="<Error><Code>AccessDenied</Code></Error>"
+ body:=make([]u8,len(raw),allocator);copy(body,transmute([]u8)raw)
+ return body,403,.None
+}
+offline_write :: proc(_:string,_:string,_:[]u8,_:[]string,_:string,_:bool,_:i64,
+ _:^os.File,_:i64)->([]u8,surf.Buffered_HTTP_Result) {
+ s:=cast(^Offline_Sequence)context.user_ptr;s.writes+=1
+ return nil,{}
+}
+@(test)
+approved_shape_read_then_put_precondition_rejects_without_write :: proc(t:^testing.T) {
+ token:=strings.repeat("fixture/token+value=",96);defer delete(token)
+ s:=Offline_Sequence{t=t,token=token};defer delete(s.url)
+ previous:=context.user_ptr;context.user_ptr=&s;defer context.user_ptr=previous
+ scope:=Scope{bucket="webtools-qualification-fixture",region="us-east-1",
+  prefix="qualification/0123456789abcdef0123456789abcdef/",profile="environment",
+  expected_account="123456789012",allow_write=true}
+ credentials:=aws.AWS_Credentials{"fixture-access","fixture-secret",token}
+ executors:=Probe_Executors{get=offline_get,write=offline_write}
+ first:=probe(scope,.Read,"0123456789abcdef0123456789abcdef",credentials,executors)
+ second:=probe(scope,.Put,"0123456789abcdef0123456789abcdef",credentials,executors)
+ testing.expect(t,first.ok&&first.object==.Absent&&first.s3_kind==.Not_Found)
+ testing.expect(t,!second.ok&&second.reason==.Read_Failed&&second.s3_kind==.Rejected)
+ testing.expect(t,second.put_effect==.Not_Sent&&second.delete_effect==.Not_Sent)
+ testing.expect_value(t,s.gets,2);testing.expect_value(t,s.writes,0)
+ fmt.println("OFFLINE identical_key=true long_token_preserved=true gets=2 writes=0 first404 second403")
+}

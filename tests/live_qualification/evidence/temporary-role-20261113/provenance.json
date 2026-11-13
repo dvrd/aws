@@ -1,0 +1,33 @@
+{
+  "source_revision": "7100b8892444b5a7d9c276333f2d5d965584083c",
+  "approved_plan_executed_once": true,
+  "ordinary_session_seconds": 900,
+  "natural_expiry_experiment": false,
+  "native_campaign_qualified": false,
+  "phase": "PUT_INTENT",
+  "initial_read_source_bound": "HTTP404 classified Absent; actual XMLerrorcode not retained",
+  "failed_step": "Put precondition GET returned Rejected; no exact HTTPstatus/XML retained",
+  "put_effect": "Not_Sent",
+  "delete_effect": "Not_Sent",
+  "ses_effect": "Not_Sent",
+  "owned_iam_cleanup_confirmed": true,
+  "all_held_children_reaped": true,
+  "native_child_retirement": "maintainedcapture finally kills owned process group and waits held child; no process-wide census claimed",
+  "real_credentials_persisted": false,
+  "source_files_sha256": {
+    "tests/live_qualification/main.odin": "5f17016872d75792cc7739d7a8762e8fa269a2b52a8c89c47d3ef94a093d5dd0",
+    "tests/live_qualification/probe.odin": "08b511343744b96512176c391de24dd9f8c2c3520cba348cef1000068a740f1c",
+    "tests/live_qualification/run.py": "fc5b7beb47e50723920afd33bc00eda9868e70ae974662ca45998953aefe0bd5"
+  },
+  "evidence_sha256": {
+    "offline-native.log.gz": "e8c6816cc062d6d734f214894ccc784629e6c5a49728219fdd2e97d5d1d266cd",
+    "result.json": "96a30b9503678839eb5303662f2ebfedf9d20c9ec4feed19d045c255e89b558d",
+    "offline-diagnosis.json": "da6063599e14837cec8a97a8f6951c037d6a234b113fff01547c26dee8e15b03",
+    "offline-rejection-test.odin.txt": "7945e981524d11587c6b6b4d0bf813530e4e0d5855c1463371b31509d9aaf6c4"
+  },
+  "controller_sha256": "906a5d987704706ca1f011d1b5487b3a602972fa32e8c3df22273a98304a41cd",
+  "offline_runner_repro_sha256": "426a43ae2f040e919b60b005a620ae020593c9bcfb7f812fd5a62fa736f5bc24",
+  "private_original_state_sha256": "37791d9c6cbee4d91f1b76f7200ce5b2518ad79fa15369be3d3e21d710808355",
+  "no_replay_or_new_provider_calls_after_failure": true,
+  "remaining": "A new provider campaign has not been authorized; diagnose safe per-read status before seeking one. No runtimebug or propagation cause is established."
+}

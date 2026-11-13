@@ -112,3 +112,19 @@ of the trust-configuration regression/fix, not provider interoperability or a
 successful TLS handshake. Other tests use injected SDK fakes and do not contact
 AWS. Real expiry, restricted-role denial and service throttling need their own
 scoped evidence; synthetic coverage must not be relabelled as live proof.
+
+The deterministic qualification fault matrix injects S3 HTTP400/403 credential-style
+rejections and429/503 availability failures through the public signed SDK API.
+It proves failed reads stay unverified instead of becoming404 absence; no PUT or
+DELETE follows a failed read. Failed PUT/DELETE/SES responses retain HTTP status
+and acknowledged response evidence without internal replay. Runner controls keep
+the original run ID and durable intent, block resending and stop before native
+calls on credential rejection/expiry. SES faults use only an injected executor;
+no simulator message is sent by these tests.
+
+These controls do not prove actual restricted-role authorization, natural session
+expiry or provider throttling. The default GET API intentionally exposes a typed
+error rather than retaining provider XML/error-code bodies; fixture XML must not
+be relabelled as observed AWS `ExpiredToken` evidence. Live S3/SES success receipts
+remain separate. Deliberate throttling load, IAM grants and new infrastructure are
+outside this campaign.

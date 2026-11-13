@@ -1,0 +1,47 @@
+{
+  "base": "b96c7cdb8c35e9ffda84998936c2410cbfcfba34",
+  "scope": "offline runner environment temporary-role mode; live campaign not executed",
+  "tests": {
+    "total": 22,
+    "new_environment_controls": 9,
+    "legacy_and_fault_controls": 13,
+    "passed": true,
+    "seconds": 0.306,
+    "command": [
+      "python3",
+      "-B",
+      "-m",
+      "unittest",
+      "discover",
+      "-s",
+      "tests/live_qualification",
+      "-p",
+      "test_*.py",
+      "-v"
+    ]
+  },
+  "source_files_sha256": {
+    "tests/live_qualification/run.py": "fc5b7beb47e50723920afd33bc00eda9868e70ae974662ca45998953aefe0bd5",
+    "tests/live_qualification/test_environment.py": "ac100a185e23ae74d7ddd0f275cc2e68d70f00942791093b09208b2e18bb426c",
+    "tests/live_qualification/README.md": "df92ec95eeba85390c31e2872f6648421fa914237723c40dc9f0a2a89e722382"
+  },
+  "baseline_run_py_sha256": "6aafd20fa6425ca041dbf77fd29faf46ac47b26aa729bff0a93311f9d9fe5859",
+  "controls_log_gzip_sha256": "2d59b074b8a59a197d1973200a3274262db6a74b4060d872969f79ff308ab923",
+  "native_scope_fields": 9,
+  "native_probe_or_sdk_changed": false,
+  "legacy_profile_controls_passed": true,
+  "provider_calls": false,
+  "real_credentials_read": false,
+  "sessions_issued": false,
+  "iam_changed": false,
+  "pushed": false,
+  "linear_changed": false,
+  "live_qualification_complete": false,
+  "limits": [
+    "FakeCLI actually executes owned child with synthetic triple and exactSTSarguments; it never calls AWS.",
+    "Existing historical S3/SES campaigns remain separate; no new writes/sends were performed.",
+    "New identity mode does not issue/refresh sessions or test natural expiration.",
+    "Credential expiration guard uses syntheticfuture/near-expiry metadata in controls only.",
+    "Caller must separately obtain authorization and provide realapprovedtemporarycredentials in process memory for a future campaign."
+  ]
+}

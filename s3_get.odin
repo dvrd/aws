@@ -1,6 +1,7 @@
 package aws
 
 import network_client "../surf"
+import x509 "core:crypto/x509"
 import "core:fmt"
 import "core:mem"
 import "core:strings"
@@ -9,6 +10,13 @@ import "core:time"
 S3_GET_BYTES_MAX :: 64 * 1024 * 1024 // Surf's response body ceiling
 S3_GET_TIMEOUT_MS :: 120000
 S3_GET_HEADERS_MAX :: 8
+
+@(private)
+s3_get_native_config :: proc(timeout_ms: i64, bytes_max: int,
+ roots: []^x509.Certificate) -> network_client.Config {
+ return {max_body_size = max(bytes_max, 1),
+  timeout = time.Duration(timeout_ms)*time.Millisecond, tls = {root_cas = roots}}
+}
 
 S3_Get_Error :: enum u8 {
 	None,
@@ -136,10 +144,11 @@ s3_get_native :: proc(
 		}
 		count += 1
 	}
-	config := network_client.Config {
-		max_body_size = max(bytes_max, 1), // zero would select Surf's 8 MiB default
-		timeout       = time.Duration(timeout_ms) * time.Millisecond,
-	}
+	// A nil root slice means omitted trust and fails before dial. This non-nil
+	// empty view explicitly requests platform anchors; Core owns their pool for
+	// the connection. Keep the backing view alive until execute has returned.
+	platform_anchor: [1]^x509.Certificate
+	config := s3_get_native_config(timeout_ms, bytes_max, platform_anchor[:0])
 	response, http_error := network_client.execute(
 		{method = .GET, url = url, headers = fields[:count]},
 		config,

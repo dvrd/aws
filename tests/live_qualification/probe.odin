@@ -75,12 +75,15 @@ object_read :: proc(config: aws.S3_Config, credentials: aws.AWS_Credentials,
  result := result_start()
  body: []u8
  error: aws.S3_Get_Error
- // Live calls use the actual public API's DEFAULT native executor. Injection is
- // exclusively for deterministic offline tests, not a replacement live path.
- if executors.get == nil {body, error = aws.s3_get(config, credentials, key, 1024)}
- else {body, error = aws.s3_get(config, credentials, key, 1024, execute = executors.get)}
+ capture := S3_Read_Observation{execute = executors.get, data = context.user_ptr}
+ previous := context.user_ptr; context.user_ptr = &capture
+ defer context.user_ptr = previous
+ body, error = aws.s3_get(config, credentials, key, 1024, execute = observed_get)
  defer delete(body)
  result.s3_kind = error
+ result.read_status, result.read_error_code = capture.status, capture.code
+ // A missing bucket is not evidence that the selected owned object is absent.
+ if capture.code == .NoSuchBucket {result.reason = .Read_Failed; return result}
  if error == .Not_Found {result.ok = true; result.object = .Absent; return result}
  if error != .None {result.reason = .Read_Failed; return result}
  actual, wanted: [32]u8

@@ -29,6 +29,11 @@ SCOPE_KEYS = {'schema', 'bucket', 'region', 'prefix', 'profile', 'expected_accou
               'allow_write', 'allow_ses', 'ses_sender'}
 RESULT_KEYS = {'schema', 'ok', 'reason', 'object', 'credential_kind', 's3_kind',
                'ses_kind', 'put_effect', 'delete_effect', 'ses_effect', 'mutation_status'}
+READ_OBSERVATION_KEYS = {'read_status', 'read_error_code'}
+READ_ERROR_CODES = {'None', 'Unknown', 'NoSuchKey', 'NoSuchBucket', 'AccessDenied',
+    'InvalidAccessKeyId', 'SignatureDoesNotMatch', 'ExpiredToken', 'InvalidToken',
+    'RequestTimeTooSkewed', 'AuthorizationHeaderMalformed', 'SlowDown', 'RequestTimeout',
+    'PermanentRedirect', 'TemporaryRedirect', 'RequestExpired'}
 REASONS = {'None', 'Invalid_Arguments', 'Invalid_Scope', 'Credential_Error', 'Read_Failed',
            'Foreign_Object', 'Put_Disabled', 'Put_Failed', 'Delete_Failed', 'Response_Mismatch',
            'SES_Disabled', 'SES_Failed'}
@@ -176,7 +181,8 @@ def receipt(directory, state, reason=None):
                   s3_qualified=state.get('s3_qualified', False), secrets_logged=False,
                   ses_selected=state['allow_ses'])
     if reason: result['reason'] = reason
-    for key in ('last_result', 'put_result', 'delete_result', 'ses_result',
+    for key in ('last_result', 'read_result', 'reconcile_result', 'put_result',
+                'delete_result', 'ses_result',
                 'credential_attestation'):
         if key in state:
             result[key] = (safe_attestation(state[key])
@@ -339,7 +345,16 @@ def native(args, state, action, env, deadline):
             '--action', action, '--scope-sha256', state['scope_sha256']]
     code, data = capture(argv, env, min(deadline, time.monotonic()+90), 8192)
     value = decode(data)
-    if not isinstance(value, dict) or set(value) != RESULT_KEYS: raise Failure('NATIVE_RESULT_INVALID')
+    if not isinstance(value, dict) or set(value) not in (RESULT_KEYS,
+            RESULT_KEYS | READ_OBSERVATION_KEYS): raise Failure('NATIVE_RESULT_INVALID')
+    if 'read_status' in value:
+        if type(value['read_status']) is not int or \
+                value['read_status'] != 0 and not 100 <= value['read_status'] <= 599 or \
+                value['read_error_code'] not in READ_ERROR_CODES:
+            raise Failure('NATIVE_RESULT_INVALID')
+        if value['read_error_code'] == 'NoSuchBucket' and (value.get('ok') or
+                value.get('object') == 'Absent'):
+            raise Failure('NATIVE_RESULT_INVALID')
     if type(value['ok']) is not bool or code not in (0, 2) or value['ok'] != (code == 0):
         raise Failure('NATIVE_RESULT_INVALID')
     if value['schema'] != 1 or type(value['schema']) is not int: raise Failure('NATIVE_RESULT_INVALID')
@@ -364,7 +379,7 @@ def action(args, state, verb, phase, success, env, deadline, launcher):
     try: result = launcher(args, state, verb, env, deadline)
     except (Failure, OSError, ValueError, TypeError, subprocess.SubprocessError):
         return receipt(args.state_dir, state, 'NATIVE_OUTCOME_UNKNOWN')
-    if verb in ('put', 'delete', 'ses'): state[verb+'_result'] = result
+    if verb in ('read', 'put', 'delete', 'ses'): state[verb+'_result'] = result
     expected = 'Owned' if verb == 'put' else 'Absent' if verb == 'delete' else None
     if not result['ok'] or expected is not None and result['object'] != expected:
         save(args, state, phase, result)
@@ -402,6 +417,8 @@ def run(args, launcher=native, credential_loader=credentials):
             atomic(args.state_dir, 'state.json', state)
         if args.command == 'reconcile':
             value = launcher(args, state, 'reconcile', env, deadline)
+            state['reconcile_result'] = value
+            atomic(args.state_dir, 'state.json', state)
             if value['ok'] and value['object'] == 'Owned' and state['phase'] != 'DELETE_INTENT':
                 save(args, state, 'PUT_VERIFIED', value)
             elif value['ok'] and value['object'] == 'Absent' and state['phase'] == 'DELETE_INTENT':

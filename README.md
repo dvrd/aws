@@ -43,7 +43,9 @@ Signing references: [AWS SigV4 query authentication](https://docs.aws.amazon.com
 ## Package dependencies and validation
 
 This package is reusable outside Saba. Vendor `aws`, `files`, `surf`, `http`
-(including `http/v1`), `ascii`, and `websocket` under one shared collection.
+(including `http/v1`), `ascii`, `websocket`, and `async` under one shared collection.
+Surf's WebSocket driver and the Core QUIC UDP bridge require that transitive
+async closure even when the consumer itself selects only the S3 API.
 Outbound HTTP is Surf's native buffered client and does not link libcurl. Signing
 stays in this package. Facade extraction and async client integration are not
 part of this client. No private Mesa helper directories, AWS SDK or application

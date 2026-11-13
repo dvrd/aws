@@ -14,7 +14,7 @@ with tempfile.TemporaryDirectory(prefix="aws-consumer-") as temporary:
     root = Path(temporary)
     packages = root / "shared"
     packages.mkdir()
-    for name in ("aws", "files", "surf", "http", "ascii", "websocket"):
+    for name in ("aws", "files", "surf", "http", "ascii", "websocket", "async"):
         shutil.copytree(shared / name, packages / name,
                         ignore=shutil.ignore_patterns(".git", "__pycache__"))
     consumer = root / "consumer"

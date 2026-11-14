@@ -1,0 +1,27 @@
+{
+  "source_revision": "8ea621a2edc0379c15c0bbda04f441fc570f17af",
+  "one_separately_approved_ordinary_session_seconds": 900,
+  "live_qualification_complete": false,
+  "phase": "READ_INTENT",
+  "read_http_status": 403,
+  "read_error_code": "AccessDenied",
+  "mutations_sent": false,
+  "ses_sent": false,
+  "owned_inline_policy_and_role_absence_confirmed": true,
+  "all_held_children_reaped": true,
+  "credentials_persisted": false,
+  "first_campaign_unchanged": true,
+  "diagnostic_campaign_state_sha256": "cd48eaf26699d9938f5aeb1193abde800b0c4e66cc9760f9cfc3357189ae90b2",
+  "safe_result_sha256": "9578a7e3dfa2aac9ab380d4bdd621c59ee28c923f379dbe75107c0038efa8ce9",
+  "controller_sha256": "db77059977711158edcb7e2c55d10581c81145863cd26d411f98bbde88c52dee",
+  "native_binary_sha256": "7a0d114f74db48769f176febc60a51be17de51519fd42251a8474739c40775e3",
+  "source_or_test_logic_changed": false,
+  "extra_provider_operation_after_cleanup": false,
+  "limits": [
+    "403AccessDenied is an actualobserved typedproviderclass; it doesnot identifythedenyingpolicy or provepermanence.",
+    "No SignatureDoesNotMatch,ExpiredToken orNoSuchBucket was observed in thiscampaign.",
+    "FreshIAMpropagation versus authorizationconfiguration is notresolved fromretainedstatus/class alone.",
+    "No retries,newsession,mutation,oldstatereset,existingIAMpolicychange orprovideroperation follows thisfailure.",
+    "Furtherlivework requires separate root review/authorization; this session wasconsumed."
+  ]
+}

@@ -1,0 +1,203 @@
+{
+  "passed": false,
+  "operations": [
+    {
+      "service": "sts",
+      "operation": "get-caller-identity",
+      "returncode": 0,
+      "error_code": null,
+      "seconds": 1.1624413339886814,
+      "held_child_reaped": true
+    },
+    {
+      "service": "iam",
+      "operation": "get-role",
+      "returncode": 254,
+      "error_code": "NoSuchEntity",
+      "seconds": 0.7853798749856651,
+      "held_child_reaped": true
+    },
+    {
+      "service": "iam",
+      "operation": "create-role",
+      "returncode": 0,
+      "error_code": null,
+      "seconds": 0.7794532499974594,
+      "held_child_reaped": true
+    },
+    {
+      "service": "iam",
+      "operation": "get-role",
+      "returncode": 0,
+      "error_code": null,
+      "seconds": 0.7377823749557137,
+      "held_child_reaped": true
+    },
+    {
+      "service": "iam",
+      "operation": "put-role-policy",
+      "returncode": 0,
+      "error_code": null,
+      "seconds": 0.7505434170016088,
+      "held_child_reaped": true
+    },
+    {
+      "service": "iam",
+      "operation": "get-role-policy",
+      "returncode": 0,
+      "error_code": null,
+      "seconds": 0.6966587500064634,
+      "held_child_reaped": true
+    },
+    {
+      "service": "sts",
+      "operation": "assume-role",
+      "returncode": 0,
+      "error_code": null,
+      "seconds": 0.7190429999609478,
+      "held_child_reaped": true
+    },
+    {
+      "service": "iam",
+      "operation": "get-role",
+      "returncode": 0,
+      "error_code": null,
+      "seconds": 0.7302353329723701,
+      "held_child_reaped": true
+    },
+    {
+      "service": "iam",
+      "operation": "get-role-policy",
+      "returncode": 0,
+      "error_code": null,
+      "seconds": 0.7010690830065869,
+      "held_child_reaped": true
+    },
+    {
+      "service": "iam",
+      "operation": "delete-role-policy",
+      "returncode": 0,
+      "error_code": null,
+      "seconds": 0.7147721670335159,
+      "held_child_reaped": true
+    },
+    {
+      "service": "iam",
+      "operation": "get-role-policy",
+      "returncode": 254,
+      "error_code": "NoSuchEntity",
+      "seconds": 0.7296373329591006,
+      "held_child_reaped": true
+    },
+    {
+      "service": "iam",
+      "operation": "get-role",
+      "returncode": 0,
+      "error_code": null,
+      "seconds": 0.7691760829766281,
+      "held_child_reaped": true
+    },
+    {
+      "service": "iam",
+      "operation": "delete-role",
+      "returncode": 0,
+      "error_code": null,
+      "seconds": 0.7659445829922333,
+      "held_child_reaped": true
+    },
+    {
+      "service": "iam",
+      "operation": "get-role",
+      "returncode": 254,
+      "error_code": "NoSuchEntity",
+      "seconds": 0.7032806670176797,
+      "held_child_reaped": true
+    }
+  ],
+  "provider_scope": "approved isolated S3 temporary role only",
+  "ses_sends": false,
+  "expiry_experiment": false,
+  "keys_persisted": false,
+  "provenance": {
+    "binary_sha256": "7a0d114f74db48769f176febc60a51be17de51519fd42251a8474739c40775e3",
+    "compiler_sha256": "dac83d6eb5faaf9f62cef37297f34a0e21dbe3976a8b8a52c81f3db3d90f0b9c",
+    "native_owner_odin_files": 10,
+    "diagnostic_source_files": 13,
+    "owner_commit": "8ea621a2edc0379c15c0bbda04f441fc570f17af",
+    "standard_source_files": 2770,
+    "runner_sha256": "e047d97ff2b8ad1405636038f0e711e667bf34768b7ed74ed8833a63d757ca14",
+    "approved_files_sha256": {
+      "PLAN.md": "c984ba3f7472da24db542d8b9299b6428230032e7b07f3461cd7af895f59ccbb",
+      "trust.json": "82610633569f0e02d69ff4cd69fb7ecea1c920583de74a8d37813eab3e50b418",
+      "permissions.json": "df97224937bf61b6ccc186fdd590100cb28b2d75f21dc14054c7c8ca68415e56",
+      "resources.json": "bb5ccd5362243c0fcd10538c796c8a84962048096e57677641d16399fe8880a0"
+    }
+  },
+  "preflight": {
+    "account_match": true,
+    "principal_exact_match": true,
+    "role_confirmed_absent": true,
+    "principal_sha256": "8ed1cda7f2f8d2faa2828b43f010f0d4206c09f9459915b2b988dddca4faf1e4"
+  },
+  "ownership_tag_sha256": "447c0fef388269b2727dc6bd8d3a97a9d5ba7bb3cc4ae63c291ccf786e609133",
+  "role_create_intent": true,
+  "role_created": true,
+  "assume_role_intent": true,
+  "ordinary_session_issued": true,
+  "campaign": {
+    "run_id": "1b460a0db5c0fd6a6aba80bf47d679e8",
+    "scope_sha256": "bbcec48b961ebeb2f51bda9157e9342d6c4dd48ef6360d96208f0880c6f13721",
+    "binary_sha256": "7a0d114f74db48769f176febc60a51be17de51519fd42251a8474739c40775e3",
+    "phase": "READ_INTENT",
+    "schema": 1,
+    "qualified": false,
+    "s3_qualified": false,
+    "secrets_logged": false,
+    "ses_selected": false,
+    "reason": "NATIVE_ACTION_NOT_VERIFIED",
+    "last_result": {
+      "schema": 1,
+      "ok": false,
+      "reason": "Read_Failed",
+      "object": "Unverified",
+      "credential_kind": "None",
+      "s3_kind": "Rejected",
+      "ses_kind": "None",
+      "put_effect": "Not_Sent",
+      "delete_effect": "Not_Sent",
+      "ses_effect": "Not_Sent",
+      "mutation_status": 0,
+      "read_status": 403,
+      "read_error_code": "AccessDenied"
+    },
+    "read_result": {
+      "schema": 1,
+      "ok": false,
+      "reason": "Read_Failed",
+      "object": "Unverified",
+      "credential_kind": "None",
+      "s3_kind": "Rejected",
+      "ses_kind": "None",
+      "put_effect": "Not_Sent",
+      "delete_effect": "Not_Sent",
+      "ses_effect": "Not_Sent",
+      "mutation_status": 0,
+      "read_status": 403,
+      "read_error_code": "AccessDenied"
+    },
+    "credential_attestation": {
+      "principal_type": "AssumedRole",
+      "role_match": true,
+      "session_present": true,
+      "expiry_guard": true,
+      "expected_role_arn_sha256": "a30d1005c99eb18147d010f3cef032796cfb6487d2b54f9210b355ca4cff3b36"
+    }
+  },
+  "error": "RuntimeError:CAMPAIGN_NOT_COMPLETE",
+  "cleanup": {
+    "ownership_verified": true,
+    "inline_policy_absent": true,
+    "role_absent": true,
+    "role_deleted": true
+  }
+}

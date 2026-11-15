@@ -1,0 +1,14 @@
+{
+  "base_commit": "1d66d898ee5c0e0b3e864a114fe6892256993d9c",
+  "controls_passed": 6,
+  "red_failures": 3,
+  "source_sha256": {
+    "tests/live_qualification/run.py": "9920b5814d51dbac8ace1d0d54e2eea2843f2068038fb36d27c18c2591193811",
+    "tests/live_qualification/test_capture.py": "1288b7159e246a03be7e00a4e897604dad2b8ec9cc7f88a3c89cc84f08c40b43"
+  },
+  "controller_only": true,
+  "sdk_runtime_api_changed": false,
+  "CLI_or_native_execution": false,
+  "provider_calls": 0,
+  "limits": "Fixed AWS CLI has no intended persistent descendants. Only unreaped owned child groups may be signalled; successful wait returncode prevents a post-reap PID/group signal."
+}

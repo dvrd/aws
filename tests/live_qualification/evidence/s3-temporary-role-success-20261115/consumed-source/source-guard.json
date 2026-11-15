@@ -1,0 +1,22 @@
+{
+  "source_guard_passed": true,
+  "owner_commit": "d3f8a7164d0a5ead428deccc2235c71c1cb59c8a",
+  "campaign_directory_absent": true,
+  "campaign_directory": "/tmp/aws416-contract-campaign-2d3006aa",
+  "provenance": {
+    "binary_sha256": "7a0d114f74db48769f176febc60a51be17de51519fd42251a8474739c40775e3",
+    "compiler_sha256": "dac83d6eb5faaf9f62cef37297f34a0e21dbe3976a8b8a52c81f3db3d90f0b9c",
+    "native_owner_odin_files": 10,
+    "diagnostic_source_files": 13,
+    "owner_commit": "d3f8a7164d0a5ead428deccc2235c71c1cb59c8a",
+    "standard_source_files": 2770,
+    "runner_sha256": "9920b5814d51dbac8ace1d0d54e2eea2843f2068038fb36d27c18c2591193811",
+    "approved_files_sha256": {
+      "PLAN.md": "27503e447e0fadd6d139a141b15815b831b240b43fd0ce342f9e079392f3d0eb",
+      "trust.json": "37807c44e71358011738ce51e1b8464682a79c90f6dafd5baceb6a292465833c",
+      "permissions.json": "989b2a2f2962c6351eca5129f99cd9ed8d5c90477e451443a7a49fdae73fd442",
+      "resources.json": "5aedd2e4df0e01be069ea19ad77f444c3dd1fb301c1b6bfa207ff6b98592fdb9"
+    }
+  },
+  "no_provider_cli_entrypoint_native_execution": true
+}

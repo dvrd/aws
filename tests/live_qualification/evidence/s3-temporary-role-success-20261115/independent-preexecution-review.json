@@ -1,0 +1,28 @@
+{
+  "passed": true,
+  "packet": "/tmp/aws416-readiness-plan-20261115-contract-2d3006aa",
+  "manifest_sha256": "1261fefb38b9a1e44b13656f06d2fc14c08174664f094c4360487094316d3050",
+  "manifest_files_verified": 51,
+  "actual_consumer_tests": 6,
+  "independent_default_limit_and_privacy_controls": 2,
+  "result_arity": 2,
+  "observed_complete_sequence_limits": [
+    16384,
+    8192,
+    16384,
+    8192,
+    8192,
+    8192
+  ],
+  "all_mock_transport": true,
+  "actual_subprocess_cli_native_provider_calls": false,
+  "frozen_before_after_match": true,
+  "owner_commit": "d3f8a7164d0a5ead428deccc2235c71c1cb59c8a",
+  "accepted_subject_to_root_requested_doc_only_successor": false,
+  "final_packet": "/tmp/aws416-readiness-plan-20261115-contract-final-2d3006aa",
+  "final_manifest_sha256": "cb119a4c5f3b743f50c03e1dd205a81e4984b13bcc15f01863c5eae545ac1797",
+  "final_manifest_files_verified": 52,
+  "final_code_config_identical_to_tested_packet": true,
+  "root_doc_corrections_verified": true,
+  "selected_review_passed": true
+}

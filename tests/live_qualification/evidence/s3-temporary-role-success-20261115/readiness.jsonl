@@ -1,0 +1,14 @@
+{"phase": "ROLE_CREATE_INTENT"}
+{"phase": "ASSUME_ROLE_INTENT", "attempt": 1, "started_monotonic_seconds": 450326.0180865}
+{"phase": "ASSUME_ROLE_OBSERVED", "attempt": 1, "outcome": "Denied", "code": "AccessDenied", "elapsed_seconds": 0.6700025000027381}
+{"phase": "ASSUME_ROLE_INTENT", "attempt": 2, "started_monotonic_seconds": 450331.693005166}
+{"phase": "ASSUME_ROLE_OBSERVED", "attempt": 2, "outcome": "Denied", "code": "AccessDenied", "elapsed_seconds": 0.6666491249925457}
+{"phase": "ASSUME_ROLE_INTENT", "attempt": 3, "started_monotonic_seconds": 450337.360697416}
+{"phase": "ASSUME_ROLE_OBSERVED", "attempt": 3, "outcome": "Issued", "code": "None", "elapsed_seconds": 0.745072000019718}
+{"phase": "CLI_READ_INTENT", "attempt": 1, "started_monotonic_seconds": 450338.8286735}
+{"phase": "CLI_READ_OBSERVED", "attempt": 1, "cli": {"code": "NoSuchKey", "status": null, "deny_layer": "NotApplicable"}, "elapsed_seconds": 0.8036089580273256}
+{"phase": "NATIVE_READ_INTENT", "cli": {"code": "NoSuchKey", "status": null, "deny_layer": "NotApplicable"}}
+{"phase": "NATIVE_READ_OBSERVED", "cli": {"code": "NoSuchKey", "status": null, "deny_layer": "NotApplicable"}, "native": {"code": "NoSuchKey", "status": 404, "deny_layer": "NotApplicable", "absent": true}}
+{"phase": "READINESS_COMPLETE", "cli": {"code": "NoSuchKey", "status": null, "deny_layer": "NotApplicable"}, "native": {"code": "NoSuchKey", "status": 404, "deny_layer": "NotApplicable", "absent": true}, "same_literal_triple": true}
+{"phase": "NATIVE_CAMPAIGN_INTENT"}
+{"phase": "CONTROLLER_STOPPED", "report": {"passed": true, "phase": "COMPLETE", "session_count": 1, "session_count_semantics": "VerifiedAcceptedOnly", "issuance": "Issued", "cleanup": {"inline_policy_absent": true, "role_absent": true}}}

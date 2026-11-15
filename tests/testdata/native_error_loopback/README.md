@@ -21,8 +21,8 @@ The peer follows the official [S3 error mapping](https://docs.aws.amazon.com/Ama
 SyntheticHTTP429 and is generic HTTP robustness, not a documented S3 pairing. Public write results preserve the HTTP status with `ok=false`
 and `transport_ok=true`: that is a completed non-success HTTP response, not a
 transport failure. One signed request is observed for each operation; no retry or
-redirect follows. The earlier9381a75 ASan PUT200/DELETE204 controls retain their separate validity;
-this corrected run repeats only changed error cases and negative controls.
+redirect follows. The default harness also retains successful PUT200/DELETE204
+controls to protect the opposite branch on every run.
 Wrong-CA controls reject TLS before any HTTP request. A deliberately wrong expected
 status proves the driver returns nonzero instead of accepting any completed reply.
 Native result fields remain fixed booleans/numbers. The Python peer report adds

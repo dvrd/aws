@@ -1,0 +1,58 @@
+{
+  "issue": "OKAMI-416",
+  "mode": "offline deterministic faults + unexecuted one-GET live-denial candidate",
+  "files": {
+    "fault_test.odin": "fb73bdeafe77536b6dc2cfbd8dee67f339f1419b252b31eb6da4b86249b5f042",
+    "test_faults.py": "e02e34793cdd98cd751f6181d3b6815601e58439fe18b7ce5491b2afb3122e21",
+    "README.md": "0002f5d274f8b32b8448d20e088c4ebfd585b2b70fbc1ab514f85148caf6ff57",
+    "credential_denial/main.odin": "4b8d9c1bd042503815080caa5ee5224afc541fcce40c32dfac41fcdd5c561d82",
+    "credential_denial/main_test.odin": "97ff0b3a31379e69ddec19a8c9e5f044c3bc8983459874a60615de17f3cf42a1",
+    "credential_denial/README.md": "e8b7a7415c57db3625e7606130b796438e5e5015864d256123718d70beccb6c9"
+  },
+  "source_unchanged": true,
+  "records": [
+    {
+      "name": "fault-address",
+      "exit_code": 0,
+      "log": "/tmp/aws416-final-fault-address.log",
+      "log_sha256": "1ca15e8198f09fb718ffa359813540d333ede8e62f59145990a72974f259157f",
+      "tests": 11
+    },
+    {
+      "name": "fault-thread",
+      "exit_code": 0,
+      "log": "/tmp/aws416-final-fault-thread.log",
+      "log_sha256": "5202f520b999a9e2c988d0512aff805a1c1442d1633fa82f3427ba2cffa0dd39",
+      "tests": 11
+    },
+    {
+      "name": "credential-denial-address",
+      "exit_code": 0,
+      "log": "/tmp/aws416-final-credential-denial-address.log",
+      "log_sha256": "e59570c3bfb1b6931a4a870c83162094d64f8160b7934f1fbd4e03a8f997c879",
+      "tests": 2
+    },
+    {
+      "name": "credential-denial-thread",
+      "exit_code": 0,
+      "log": "/tmp/aws416-final-credential-denial-thread.log",
+      "log_sha256": "ca5b3cb1c85a55ac06862f31e8d313d5794eee7534d368678ca48a7ae46e67da",
+      "tests": 2
+    },
+    {
+      "name": "runner",
+      "exit_code": 0,
+      "tests": 13,
+      "log": "/tmp/aws416-fault-runner.log",
+      "log_sha256": "148316468bc34e6b6fab8a0d014afa74404cffce39221b50e2b52c9a0bbd7117"
+    }
+  ],
+  "consumer_log": "/tmp/aws416-fault-consumer.log",
+  "live_probe_run": false,
+  "provider_calls": false,
+  "provider_writes": false,
+  "ses_sends": false,
+  "production_runtime_changes": false,
+  "commits": false,
+  "mesa_writes": false
+}

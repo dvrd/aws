@@ -1,0 +1,301 @@
+{
+  "passed": true,
+  "owned_loopback_only": true,
+  "provider_calls": false,
+  "credentials": "public synthetic strings only",
+  "source_unchanged": true,
+  "compiler_sha256": "dac83d6eb5faaf9f62cef37297f34a0e21dbe3976a8b8a52c81f3db3d90f0b9c",
+  "binary_sha256": "c7db16c9688cd91249c942a18a1c3f0a8b6af45e0075e8a68e1385d69c35a9fe",
+  "cases": [
+    {
+      "method": "PUT",
+      "response_status": 403,
+      "trust_negative": false,
+      "wrong_status_negative": false,
+      "native_exit": 0,
+      "observation": {
+        "passed": true,
+        "ok": false,
+        "transport_ok": true,
+        "status": 403
+      },
+      "connections": 1,
+      "requests": 1,
+      "signed_session_request": true,
+      "tls_rejected": false
+    },
+    {
+      "method": "PUT",
+      "response_status": 429,
+      "trust_negative": false,
+      "wrong_status_negative": false,
+      "native_exit": 0,
+      "observation": {
+        "passed": true,
+        "ok": false,
+        "transport_ok": true,
+        "status": 429
+      },
+      "connections": 1,
+      "requests": 1,
+      "signed_session_request": true,
+      "tls_rejected": false
+    },
+    {
+      "method": "PUT",
+      "response_status": 503,
+      "trust_negative": false,
+      "wrong_status_negative": false,
+      "native_exit": 0,
+      "observation": {
+        "passed": true,
+        "ok": false,
+        "transport_ok": true,
+        "status": 503
+      },
+      "connections": 1,
+      "requests": 1,
+      "signed_session_request": true,
+      "tls_rejected": false
+    },
+    {
+      "method": "PUT",
+      "response_status": 200,
+      "trust_negative": false,
+      "wrong_status_negative": false,
+      "native_exit": 0,
+      "observation": {
+        "passed": true,
+        "ok": true,
+        "transport_ok": true,
+        "status": 200
+      },
+      "connections": 1,
+      "requests": 1,
+      "signed_session_request": true,
+      "tls_rejected": false
+    },
+    {
+      "method": "PUT",
+      "response_status": 403,
+      "trust_negative": true,
+      "wrong_status_negative": false,
+      "native_exit": 0,
+      "observation": {
+        "passed": true,
+        "ok": false,
+        "transport_ok": false,
+        "status": 0
+      },
+      "connections": 1,
+      "requests": 0,
+      "signed_session_request": false,
+      "tls_rejected": true
+    },
+    {
+      "method": "DELETE",
+      "response_status": 403,
+      "trust_negative": false,
+      "wrong_status_negative": false,
+      "native_exit": 0,
+      "observation": {
+        "passed": true,
+        "ok": false,
+        "transport_ok": true,
+        "status": 403
+      },
+      "connections": 1,
+      "requests": 1,
+      "signed_session_request": true,
+      "tls_rejected": false
+    },
+    {
+      "method": "DELETE",
+      "response_status": 429,
+      "trust_negative": false,
+      "wrong_status_negative": false,
+      "native_exit": 0,
+      "observation": {
+        "passed": true,
+        "ok": false,
+        "transport_ok": true,
+        "status": 429
+      },
+      "connections": 1,
+      "requests": 1,
+      "signed_session_request": true,
+      "tls_rejected": false
+    },
+    {
+      "method": "DELETE",
+      "response_status": 503,
+      "trust_negative": false,
+      "wrong_status_negative": false,
+      "native_exit": 0,
+      "observation": {
+        "passed": true,
+        "ok": false,
+        "transport_ok": true,
+        "status": 503
+      },
+      "connections": 1,
+      "requests": 1,
+      "signed_session_request": true,
+      "tls_rejected": false
+    },
+    {
+      "method": "DELETE",
+      "response_status": 204,
+      "trust_negative": false,
+      "wrong_status_negative": false,
+      "native_exit": 0,
+      "observation": {
+        "passed": true,
+        "ok": true,
+        "transport_ok": true,
+        "status": 204
+      },
+      "connections": 1,
+      "requests": 1,
+      "signed_session_request": true,
+      "tls_rejected": false
+    },
+    {
+      "method": "DELETE",
+      "response_status": 403,
+      "trust_negative": true,
+      "wrong_status_negative": false,
+      "native_exit": 0,
+      "observation": {
+        "passed": true,
+        "ok": false,
+        "transport_ok": false,
+        "status": 0
+      },
+      "connections": 1,
+      "requests": 0,
+      "signed_session_request": false,
+      "tls_rejected": true
+    },
+    {
+      "method": "PUT",
+      "response_status": 200,
+      "trust_negative": false,
+      "wrong_status_negative": true,
+      "native_exit": 1,
+      "observation": {
+        "passed": false,
+        "ok": true,
+        "transport_ok": true,
+        "status": 200
+      },
+      "connections": 1,
+      "requests": 1,
+      "signed_session_request": true,
+      "tls_rejected": false
+    }
+  ],
+  "limits": [
+    "Simulated403/429/503; not real provider throttling, natural session expiry or restricted-role denial.",
+    "No production SDK/Surf/API/trust/deadline change."
+  ],
+  "base_owner": "134f07247c6107f57932ccb65ada0184cd075c5a",
+  "native_default_executor": true,
+  "driver_source_sha256": "905274ee33f2ed3a4ae9db35085777ba4a0b71ba47f8e6b64f243edf5e1037db",
+  "harness_source_sha256": "b82cbab5278be338c5bd05bf1b05e72ce81e4605c0ab1a2855fa4160c4a62d6f",
+  "old_runtime_baseline_passed": true,
+  "baseline_raw_sha256": "74e85a2f9f4b6cd4c4638172a8da71a5d9274e9199937cc777ef1301d9630a46",
+  "final_raw_sha256": "3fba4380b8456f202db09ca86e9d216482e533b809c36973876599ea1d93d05e",
+  "source_snapshot_sha256": "707bd01b05823c1e5bad1217b3afef5282be0a65a432327d38d227b68c68ba73",
+  "source_files_checked": 877,
+  "standard_source_files_verified": 2770,
+  "standard_source_map_sha256": "77d6e4ee1809f7217ad595be3c088c7454c97aae6eeb8d21f99c937fd8260763",
+  "matching_compiler_root": "/Users/kakurega/dev/oss/Odin",
+  "compiler_version": "dev-2026-11:c826157de",
+  "package_asan_tests": 20,
+  "package_memory_tracking": true,
+  "runtime_files_changed": [],
+  "synthetic_http_requests": 9,
+  "owned_tls_connections": 11,
+  "wrong_ca_controls": 2,
+  "wrong_status_control": 1,
+  "initial_fixture_compile_failure_retained": true,
+  "inputs": {
+    "native-address.log": {
+      "original": "/tmp/aws416-native-error-loopback-20261115/final-address.log",
+      "sha256": "d156925b99f80e408853f405b4a085e513b3c21bd8d7ed407773e861263b8d2a"
+    },
+    "package-address.json": {
+      "original": "/tmp/aws416-native-error-loopback-20261115/package-address.json",
+      "sha256": "30ae3b01b81995bb423196e59887ad776a14b56fd85e4dfe755af13c65462c51"
+    },
+    "aws416-ses-simulator.json": {
+      "original": "/Users/kakurega/dev/oss/Odin/reports/evidence/reliability-campaign-20261112/aws416-ses-simulator.json",
+      "sha256": "30c507dd1c2bf0322e76b274c395cc0fdfb08b06bd674c7b14ea2421298cbb04"
+    },
+    "aws416-live-credential-denial.json": {
+      "original": "/Users/kakurega/dev/oss/Odin/reports/evidence/reliability-campaign-20261112/aws416-live-credential-denial.json",
+      "sha256": "6123cd12f026a6628bd80043b6c13fcaa38104b1e5a5fdfddfd24b47d0a5e968"
+    },
+    "aws416-offline-faults.json": {
+      "original": "/Users/kakurega/dev/oss/Odin/reports/evidence/reliability-campaign-20261112/aws416-offline-faults.json",
+      "sha256": "d34b919b9730f75eb54272e01da4d597b017bb231c0ce43acf965f511d1f257d"
+    },
+    "fixture-compile-failure.log.gz": {
+      "original": "/tmp/aws416-native-error-loopback-20261115/native-address.log",
+      "uncompressed_sha256": "4f4a1a220d7d614e4c0d1bceca615b3acf480992dddfa36451c70f39566be09d",
+      "stored_sha256": "86d2c9a2a153cd3b113d1b5515e6d8e5e3dd0f407be0d0ab1f6b6258b1d65428"
+    },
+    "package-address.log.gz": {
+      "original": "/tmp/aws416-native-error-loopback-20261115/package-address.log",
+      "uncompressed_sha256": "8ff5fee005ad99c19998af8fcf9d418aa80d9a6de4c2714183e269ca00de00df",
+      "stored_sha256": "cad995f928e3c2103e99100d280534be63c5f770334cee7b75c5d3d755e378ea"
+    }
+  },
+  "commands": {
+    "wire": [
+      "python3",
+      "-B",
+      "tests/native_error_loopback.py",
+      "--odin",
+      "/Users/kakurega/dev/oss/Odin/odin",
+      "--shared-root",
+      "/Users/kakurega/dev/oss/Odin/shared",
+      "--report",
+      "/tmp/aws416-native-error-loopback-20261115/final-address.json"
+    ],
+    "package": [
+      "/Users/kakurega/dev/oss/Odin/odin",
+      "test",
+      "/tmp/aws416-native-error-loopback-20261115/package-shared/aws",
+      "-collection:shared=/tmp/aws416-native-error-loopback-20261115/package-shared",
+      "-thread-count:1",
+      "-vet",
+      "-warnings-as-errors",
+      "-sanitize:address",
+      "-define:ODIN_TEST_FAIL_ON_BAD_MEMORY=true",
+      "-out:/tmp/aws416-native-error-loopback-20261115/aws-package-address"
+    ]
+  },
+  "mesa_selected_aws_paths_unchanged_by_this_batch": 16,
+  "mesa_new_selected_paths": [],
+  "preexisting_mesa_baseline_differences": {
+    "aws/PROVENANCE.md": {
+      "owner_baseline_sha256": "f8591c1a1de0ff1c3d7c4980d12e4bae400bcefab9453e954130b85b736dbc5c",
+      "mesa_sha256": "d91101b36045312b63fd0bec04043723e91c60163eff8c0ff2d5fa31ad843df0"
+    },
+    "aws/README.md": {
+      "owner_baseline_sha256": "f17752f79ce8777e06131ff1bfef1440db9e5fed1c37d71cac7b141f8e5ad6c6",
+      "mesa_sha256": "462164b3ece0bea5f5579e0d204ce790f251872d2c7d2227b0bde324492c6f46"
+    },
+    "aws/s3_get_test.odin": {
+      "owner_baseline_sha256": "ca4e52ccaec1d311b7b002dfe6c42feff606f930943e95acdf0fe070b1d0c446",
+      "mesa_sha256": "af46e0dd3c96eb3790a749cf87f0f8118d91651e7126be1ea094dbee7cba08fa"
+    },
+    "aws/tests/check_consumer.py": {
+      "owner_baseline_sha256": "9a1d9d7d44aa69a41c14ad8c0369e255556a258be95f57e6bbcd1878614b6297",
+      "mesa_sha256": "9249ad6922f63501cd119a674b143677e764551db4274cdce742dd0a0bbe0f01"
+    }
+  },
+  "mesa_current_owner_identical_records": 12
+}

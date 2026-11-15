@@ -1,0 +1,63 @@
+{
+  "binary_sha256": "0e9e5d03994e9df497b244ae1d52e75bb5adfdd7c232d5cfe3feeeb29dd0248c",
+  "delete_result": {
+    "credential_kind": "None",
+    "delete_effect": "Response_Received",
+    "mutation_status": 204,
+    "object": "Absent",
+    "ok": true,
+    "put_effect": "Not_Sent",
+    "reason": "None",
+    "s3_kind": "Not_Found",
+    "schema": 1,
+    "ses_effect": "Not_Sent",
+    "ses_kind": "None"
+  },
+  "last_result": {
+    "credential_kind": "None",
+    "delete_effect": "Not_Sent",
+    "mutation_status": 200,
+    "object": "Unverified",
+    "ok": true,
+    "put_effect": "Not_Sent",
+    "reason": "None",
+    "s3_kind": "None",
+    "schema": 1,
+    "ses_effect": "Response_Received",
+    "ses_kind": "None"
+  },
+  "phase": "COMPLETE",
+  "put_result": {
+    "credential_kind": "None",
+    "delete_effect": "Not_Sent",
+    "mutation_status": 200,
+    "object": "Owned",
+    "ok": true,
+    "put_effect": "Response_Received",
+    "reason": "None",
+    "s3_kind": "None",
+    "schema": 1,
+    "ses_effect": "Not_Sent",
+    "ses_kind": "None"
+  },
+  "qualified": true,
+  "run_id": "1ed0b21239b0d06613a23f202e1c5a9e",
+  "s3_qualified": true,
+  "schema": 1,
+  "scope_sha256": "5dfcc7fe3ae9f113ed5d0e64e353d193cbce5aaef728f2d17c1f6680eab2d0a8",
+  "secrets_logged": false,
+  "ses_result": {
+    "credential_kind": "None",
+    "delete_effect": "Not_Sent",
+    "mutation_status": 200,
+    "object": "Unverified",
+    "ok": true,
+    "put_effect": "Not_Sent",
+    "reason": "None",
+    "s3_kind": "None",
+    "schema": 1,
+    "ses_effect": "Response_Received",
+    "ses_kind": "None"
+  },
+  "ses_selected": true
+}

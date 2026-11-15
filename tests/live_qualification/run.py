@@ -240,9 +240,14 @@ def capture(argv, env, deadline, limit=MAX_BYTES):
         return code, bytes(output)
     finally:
         selector.close()
-        try: os.killpg(child.pid, signal.SIGKILL)
-        except ProcessLookupError: pass
-        child.wait(timeout=5); child.stdout.close()
+        try:
+            # Only this capture owns/reaps child; a known returncode means wait
+            # already released its PID. Never signal a potentially reused group.
+            if child.returncode is None:
+                try: os.killpg(child.pid, signal.SIGKILL)
+                except ProcessLookupError: pass
+                child.wait(timeout=5)
+        finally: child.stdout.close()
 
 
 class VerifiedEnvironment(dict):

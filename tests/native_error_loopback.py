@@ -137,7 +137,7 @@ def main():
         ca=shared/'surf/tests/http3/localhost.pem';wrong=shared/'http/v3/testdata/root.pem'
         cases=[]
         for method in ('PUT','DELETE'):
-            for status in (400,403,503,429):
+            for status in (400,403,503,429,200 if method=='PUT' else 204):
                 cases.append(run_case(binary,ca,context,method,status,capture,environment))
             cases.append(run_case(binary,wrong,context,method,403,capture,environment,trust=True))
         cases.append(run_case(binary,ca,context,'PUT',200,capture,environment,wrong_status=True))

@@ -1,0 +1,54 @@
+{
+  "owner_revision": "0d4013bfb74045df7d1ac0c948bc5a035aba5580",
+  "native_probe_executed": false,
+  "validated_probe_binary_sha256": "7a0d114f74db48769f176febc60a51be17de51519fd42251a8474739c40775e3",
+  "validated_source_binding": {
+    "binary_sha256": "7a0d114f74db48769f176febc60a51be17de51519fd42251a8474739c40775e3",
+    "compiler_sha256": "dac83d6eb5faaf9f62cef37297f34a0e21dbe3976a8b8a52c81f3db3d90f0b9c",
+    "native_owner_odin_files": 10,
+    "diagnostic_source_files": 13,
+    "owner_commit": "0d4013bfb74045df7d1ac0c948bc5a035aba5580",
+    "standard_source_files": 2770,
+    "runner_sha256": "e047d97ff2b8ad1405636038f0e711e667bf34768b7ed74ed8833a63d757ca14",
+    "approved_files_sha256": {
+      "PLAN.md": "5860a57c41ee861420a2bea00062043ef8102df594ba697f7016b1281955b093",
+      "trust.json": "0c7da3257d8fd2e53ed756a6f7126bb6de74ec171893d2919287ea7c02544291",
+      "permissions.json": "bc3e9c0a76a528b860bb5fd0bec659401e020c918d75132e03841cef7df61962",
+      "resources.json": "84956d036d37ec18bec5b1b0525bcf35a2e6fd3c29de6f75b6bfcebc5dd7b90e"
+    }
+  },
+  "plan_manifest_sha256": "7cc902cef8cf8fb89a2a5b80682417d26c33e9b5347874ca1b3e104a78d72582",
+  "plan_and_controller_sha256": {
+    "PLAN.md": "5860a57c41ee861420a2bea00062043ef8102df594ba697f7016b1281955b093",
+    "resources.json": "84956d036d37ec18bec5b1b0525bcf35a2e6fd3c29de6f75b6bfcebc5dd7b90e",
+    "trust.json": "0c7da3257d8fd2e53ed756a6f7126bb6de74ec171893d2919287ea7c02544291",
+    "permissions.json": "bc3e9c0a76a528b860bb5fd0bec659401e020c918d75132e03841cef7df61962",
+    "operator-metadata.json": "f28877e5218f6105d1a4df4cac996734dd4be5ccd92fbb359211e20654a4a421",
+    "controller.py": "2466c539f2bf5c192724eef7aabcc21b5dcc2f25ab22a3337154578a3a1d4c9f",
+    "live_adapter.py": "5d6b48ca71bf154c77134cf848ee1cfab23991e8487f63709260323ba6311415",
+    "lifecycle.py": "b851e961eb5877880b85ceed0b31458b4978250a562ce703b1463de72f397648"
+  },
+  "original_evidence_sha256": {
+    "result.json": "6e88989baa0ee7d8682b128feae86d27f1d93ec676dcdadb5d71f76d8db3fc45",
+    "readiness.jsonl": "f2cbd7a2720d4b1aeda61ab7f8dd3e09ef8099bccab36355628fa35623e8f679",
+    "state/state.json": "c320b1c4799986d6b3da0f99588bd4a6e3d7b09318c023a91668f508cc6a7d28",
+    "state/scope.json": "120b702af495b32398c0e20191945cb786fd3bab324e6090baca8ed843041722",
+    "state/credential-policy.json": "c8fb0421ab3f8744b4fc22a5a79cbcc9e9eddb7225ef73af5d536a5750c72f41",
+    "state/receipt.json": "458517fc334c5a84cb87dcfc24f7372bd383f2f666a001e353a939cf543c8955"
+  },
+  "prior_campaign_state_sha256": {
+    "first": "37791d9c6cbee4d91f1b76f7200ce5b2518ad79fa15369be3d3e21d710808355",
+    "diagnostic": "cd48eaf26699d9938f5aeb1193abde800b0c4e66cc9760f9cfc3357189ae90b2"
+  },
+  "prior_campaign_states_unchanged": true,
+  "offline_checks": {
+    "approved_files_unchanged": true,
+    "preflight_principal_hash_matches_trust": true,
+    "trust_session_equals_command_session_source": true,
+    "session_name_syntax_valid": true,
+    "requested_duration_seconds": 900,
+    "trust_and_inline_policy_verified_before_assume": true,
+    "source_logic_changed": false,
+    "new_provider_calls": 0
+  }
+}

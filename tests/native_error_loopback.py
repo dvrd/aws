@@ -8,6 +8,8 @@ PACKAGES=('aws','files','surf','http','ascii','websocket','async')
 MARKER=b'private-native-loopback-marker'
 KEY='public-fixture-key'
 TOKEN='public-fixture-session'
+ERROR_CODES={400:'ExpiredToken',403:'AccessDenied',503:'SlowDown',429:'SyntheticHTTP429'}
+ERROR_SOURCE='https://docs.aws.amazon.com/AmazonS3/latest/API/API_Error.html'
 
 def digest(path):return hashlib.sha256(path.read_bytes()).hexdigest()
 
@@ -80,7 +82,8 @@ def peer(listener,context,method,status,observed):
                     assert authorization.startswith(('AWS4-HMAC-SHA256 Credential='+KEY+'/').encode())
                     assert b'x-amz-security-token' in authorization
                     observed['requests']+=1;observed['signed_session_request']=True
-                    code='ExpiredToken' if status==403 else 'SlowDown' if status==429 else 'ServiceUnavailable'
+                    code=ERROR_CODES.get(status,'None')
+                    observed['response_error_code']=code
                     response=b'' if status in (200,204) else b'<Error><Code>'+code.encode()+b'</Code><Message>'+MARKER+b'</Message></Error>'
                     stream.sendall(('HTTP/1.1 '+str(status)+' Owned\r\nContent-Length: '+str(len(response))+'\r\nConnection: close\r\n\r\n').encode()+response)
             except ssl.SSLError:
@@ -88,7 +91,8 @@ def peer(listener,context,method,status,observed):
     except BaseException as error:observed['failure']=type(error).__name__
 
 def run_case(binary,ca,context,method,status,capture,environment,trust=False,wrong_status=False):
-    observed=dict(connections=0,requests=0,signed_session_request=False,tls_rejected=False)
+    observed=dict(connections=0,requests=0,signed_session_request=False,tls_rejected=False,
+                  response_error_code='NotSent')
     with socket.socket() as listener:
         listener.bind(('127.0.0.1',0));listener.listen(4);listener.settimeout(3)
         thread=threading.Thread(target=peer,args=(listener,context,method,status,observed));thread.start()
@@ -110,6 +114,7 @@ def run_case(binary,ca,context,method,status,capture,environment,trust=False,wro
     assert observed['connections']==1
     assert observed['requests']==(0 if trust else 1)
     assert observed['tls_rejected'] is trust
+    assert observed['response_error_code']==('NotSent' if trust else ERROR_CODES.get(status,'None'))
     return dict(method=method,response_status=status,trust_negative=trust,wrong_status_negative=wrong_status,native_exit=code,observation=result,**observed)
 
 def main():
@@ -132,12 +137,12 @@ def main():
         ca=shared/'surf/tests/http3/localhost.pem';wrong=shared/'http/v3/testdata/root.pem'
         cases=[]
         for method in ('PUT','DELETE'):
-            for status in (403,429,503,200 if method=='PUT' else 204):
+            for status in (400,403,503,429):
                 cases.append(run_case(binary,ca,context,method,status,capture,environment))
             cases.append(run_case(binary,wrong,context,method,403,capture,environment,trust=True))
         cases.append(run_case(binary,ca,context,'PUT',200,capture,environment,wrong_status=True))
         binary_sha=digest(binary)
     assert before==snapshot(sources),'source changed'
-    report=dict(passed=True,owned_loopback_only=True,provider_calls=False,credentials='public synthetic strings only',source_unchanged=True,compiler_sha256=digest(args.odin),binary_sha256=binary_sha,build_command=command,cases=cases,source_before=before,limits=['Simulated403/429/503; not real provider throttling, natural session expiry or restricted-role denial.','No production SDK/Surf/API/trust/deadline change.'])
+    report=dict(passed=True,owned_loopback_only=True,provider_calls=False,credentials='public synthetic strings only',source_unchanged=True,compiler_sha256=digest(args.odin),binary_sha256=binary_sha,build_command=command,cases=cases,source_before=before,error_mapping_source=ERROR_SOURCE,error_mapping={str(k):v for k,v in ERROR_CODES.items()},error_code_labels_are_peer_responses_not_sdk_xml_classification=True,limits=['Simulated400ExpiredToken/403AccessDenied/503SlowDown;429SyntheticHTTP429 is generic robustness only, not an AWS S3 error mapping.','No production SDK/Surf/API/trust/deadline change.'])
     args.report.write_text(json.dumps(report,indent=2)+'\n');print(json.dumps(dict(passed=True,cases=len(cases),report=str(args.report))))
 if __name__=='__main__':main()

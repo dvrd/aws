@@ -1,0 +1,260 @@
+{
+  "passed": true,
+  "owned_loopback_only": true,
+  "provider_calls": false,
+  "credentials": "public synthetic strings only",
+  "source_unchanged": true,
+  "compiler_sha256": "dac83d6eb5faaf9f62cef37297f34a0e21dbe3976a8b8a52c81f3db3d90f0b9c",
+  "binary_sha256": "202ac77107738c26bc637e787f6849114114385646adfe6cd1b74face94c5110",
+  "build_command": [
+    "/Users/kakurega/dev/oss/Odin/odin",
+    "build",
+    "/Users/kakurega/dev/oss/Odin/shared/.webtools-worktrees/aws416-native-error-loopback/tests/testdata/native_error_loopback",
+    "-collection:shared=/var/folders/dr/rhcpqcds1wqd3824tvjn0f940000gn/T/aws-native-error-loopback-udoo17st/shared",
+    "-thread-count:1",
+    "-vet",
+    "-warnings-as-errors",
+    "-sanitize:address",
+    "-out:/var/folders/dr/rhcpqcds1wqd3824tvjn0f940000gn/T/aws-native-error-loopback-udoo17st/native-errors"
+  ],
+  "cases": [
+    {
+      "method": "PUT",
+      "response_status": 400,
+      "trust_negative": false,
+      "wrong_status_negative": false,
+      "native_exit": 0,
+      "observation": {
+        "passed": true,
+        "ok": false,
+        "transport_ok": true,
+        "status": 400
+      },
+      "connections": 1,
+      "requests": 1,
+      "signed_session_request": true,
+      "tls_rejected": false,
+      "response_error_code": "ExpiredToken"
+    },
+    {
+      "method": "PUT",
+      "response_status": 403,
+      "trust_negative": false,
+      "wrong_status_negative": false,
+      "native_exit": 0,
+      "observation": {
+        "passed": true,
+        "ok": false,
+        "transport_ok": true,
+        "status": 403
+      },
+      "connections": 1,
+      "requests": 1,
+      "signed_session_request": true,
+      "tls_rejected": false,
+      "response_error_code": "AccessDenied"
+    },
+    {
+      "method": "PUT",
+      "response_status": 503,
+      "trust_negative": false,
+      "wrong_status_negative": false,
+      "native_exit": 0,
+      "observation": {
+        "passed": true,
+        "ok": false,
+        "transport_ok": true,
+        "status": 503
+      },
+      "connections": 1,
+      "requests": 1,
+      "signed_session_request": true,
+      "tls_rejected": false,
+      "response_error_code": "SlowDown"
+    },
+    {
+      "method": "PUT",
+      "response_status": 429,
+      "trust_negative": false,
+      "wrong_status_negative": false,
+      "native_exit": 0,
+      "observation": {
+        "passed": true,
+        "ok": false,
+        "transport_ok": true,
+        "status": 429
+      },
+      "connections": 1,
+      "requests": 1,
+      "signed_session_request": true,
+      "tls_rejected": false,
+      "response_error_code": "SyntheticHTTP429"
+    },
+    {
+      "method": "PUT",
+      "response_status": 403,
+      "trust_negative": true,
+      "wrong_status_negative": false,
+      "native_exit": 0,
+      "observation": {
+        "passed": true,
+        "ok": false,
+        "transport_ok": false,
+        "status": 0
+      },
+      "connections": 1,
+      "requests": 0,
+      "signed_session_request": false,
+      "tls_rejected": true,
+      "response_error_code": "NotSent"
+    },
+    {
+      "method": "DELETE",
+      "response_status": 400,
+      "trust_negative": false,
+      "wrong_status_negative": false,
+      "native_exit": 0,
+      "observation": {
+        "passed": true,
+        "ok": false,
+        "transport_ok": true,
+        "status": 400
+      },
+      "connections": 1,
+      "requests": 1,
+      "signed_session_request": true,
+      "tls_rejected": false,
+      "response_error_code": "ExpiredToken"
+    },
+    {
+      "method": "DELETE",
+      "response_status": 403,
+      "trust_negative": false,
+      "wrong_status_negative": false,
+      "native_exit": 0,
+      "observation": {
+        "passed": true,
+        "ok": false,
+        "transport_ok": true,
+        "status": 403
+      },
+      "connections": 1,
+      "requests": 1,
+      "signed_session_request": true,
+      "tls_rejected": false,
+      "response_error_code": "AccessDenied"
+    },
+    {
+      "method": "DELETE",
+      "response_status": 503,
+      "trust_negative": false,
+      "wrong_status_negative": false,
+      "native_exit": 0,
+      "observation": {
+        "passed": true,
+        "ok": false,
+        "transport_ok": true,
+        "status": 503
+      },
+      "connections": 1,
+      "requests": 1,
+      "signed_session_request": true,
+      "tls_rejected": false,
+      "response_error_code": "SlowDown"
+    },
+    {
+      "method": "DELETE",
+      "response_status": 429,
+      "trust_negative": false,
+      "wrong_status_negative": false,
+      "native_exit": 0,
+      "observation": {
+        "passed": true,
+        "ok": false,
+        "transport_ok": true,
+        "status": 429
+      },
+      "connections": 1,
+      "requests": 1,
+      "signed_session_request": true,
+      "tls_rejected": false,
+      "response_error_code": "SyntheticHTTP429"
+    },
+    {
+      "method": "DELETE",
+      "response_status": 403,
+      "trust_negative": true,
+      "wrong_status_negative": false,
+      "native_exit": 0,
+      "observation": {
+        "passed": true,
+        "ok": false,
+        "transport_ok": false,
+        "status": 0
+      },
+      "connections": 1,
+      "requests": 0,
+      "signed_session_request": false,
+      "tls_rejected": true,
+      "response_error_code": "NotSent"
+    },
+    {
+      "method": "PUT",
+      "response_status": 200,
+      "trust_negative": false,
+      "wrong_status_negative": true,
+      "native_exit": 1,
+      "observation": {
+        "passed": false,
+        "ok": true,
+        "transport_ok": true,
+        "status": 200
+      },
+      "connections": 1,
+      "requests": 1,
+      "signed_session_request": true,
+      "tls_rejected": false,
+      "response_error_code": "None"
+    }
+  ],
+  "error_mapping_source": "https://docs.aws.amazon.com/AmazonS3/latest/API/API_Error.html",
+  "error_mapping": {
+    "400": "ExpiredToken",
+    "403": "AccessDenied",
+    "503": "SlowDown",
+    "429": "SyntheticHTTP429"
+  },
+  "error_code_labels_are_peer_responses_not_sdk_xml_classification": true,
+  "limits": [
+    "Simulated400ExpiredToken/403AccessDenied/503SlowDown;429SyntheticHTTP429 is generic robustness only, not an AWS S3 error mapping.",
+    "No production SDK/Surf/API/trust/deadline change."
+  ],
+  "base_commit": "9381a75a8c9ba73940c21dde08feeaa55f4b4906",
+  "fixture_only_correction": true,
+  "raw_report": "/tmp/aws416-native-error-mapping-20261115/address.json",
+  "raw_report_sha256": "0ced9a442bb01b09059ad64802fdeb4844577456b74e736e9dbe49aad99ffac9",
+  "source_snapshot_files": 888,
+  "source_snapshot_sha256": "ae30ab08f5e324190ebb1144a6d22826f3876cb943ea9a6a84f3b22f5ec1b6cd",
+  "harness_sha256": "ab1362e9b083fb014137ad1d74004034e9100d204c71437e9917c6a823515101",
+  "driver_sha256": "905274ee33f2ed3a4ae9db35085777ba4a0b71ba47f8e6b64f243edf5e1037db",
+  "full_command": [
+    "python3",
+    "-B",
+    "tests/native_error_loopback.py",
+    "--odin",
+    "/Users/kakurega/dev/oss/Odin/odin",
+    "--shared-root",
+    "/Users/kakurega/dev/oss/Odin/shared",
+    "--report",
+    "/tmp/aws416-native-error-mapping-20261115/address.json"
+  ],
+  "package_tests_rerun": false,
+  "package_asan_tests_reused": 20,
+  "package_evidence": "../native-error-loopback-20261115/package-address.json",
+  "package_evidence_sha256": "30ae3b01b81995bb423196e59887ad776a14b56fd85e4dfe755af13c65462c51",
+  "previous_package_logs_unchanged": true,
+  "positive_200_204_controls_reused_from_base": true,
+  "previous_mapping_labels_superseded": true,
+  "new_mesa_selected_paths": [],
+  "production_changes": []
+}

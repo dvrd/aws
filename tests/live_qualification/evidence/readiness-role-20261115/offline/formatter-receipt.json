@@ -1,0 +1,89 @@
+{
+  "passed": true,
+  "installed_version": "2.34.40",
+  "no_cli_execution": true,
+  "no_session_created": true,
+  "no_network": true,
+  "no_user_aws_config_read": true,
+  "fixtures": [
+    {
+      "error_format": "default_no_session",
+      "synthetic_operation": "AssumeRole",
+      "synthetic_code": "AccessDenied",
+      "formatter_returncode": 254,
+      "synthetic_formatted_error": "\naws: [ERROR]: An error occurred (AccessDenied) when calling the AssumeRole operation: SYNTHETIC_OFFLINE_ERROR\n",
+      "actual_assume_adapter_outcome": "Denied",
+      "lifecycle_legacy_code": "AccessDenied"
+    },
+    {
+      "error_format": "default_no_session",
+      "synthetic_operation": "GetRole",
+      "synthetic_code": "NoSuchEntity",
+      "formatter_returncode": 254,
+      "synthetic_formatted_error": "\naws: [ERROR]: An error occurred (NoSuchEntity) when calling the GetRole operation: SYNTHETIC_OFFLINE_ERROR\n",
+      "actual_assume_adapter_outcome": "Unknown",
+      "lifecycle_legacy_code": "NoSuchEntity"
+    },
+    {
+      "error_format": "enhanced",
+      "synthetic_operation": "AssumeRole",
+      "synthetic_code": "AccessDenied",
+      "formatter_returncode": 254,
+      "synthetic_formatted_error": "\naws: [ERROR]: An error occurred (AccessDenied) when calling the AssumeRole operation: SYNTHETIC_OFFLINE_ERROR\n",
+      "actual_assume_adapter_outcome": "Denied",
+      "lifecycle_legacy_code": "AccessDenied"
+    },
+    {
+      "error_format": "enhanced",
+      "synthetic_operation": "GetRole",
+      "synthetic_code": "NoSuchEntity",
+      "formatter_returncode": 254,
+      "synthetic_formatted_error": "\naws: [ERROR]: An error occurred (NoSuchEntity) when calling the GetRole operation: SYNTHETIC_OFFLINE_ERROR\n",
+      "actual_assume_adapter_outcome": "Unknown",
+      "lifecycle_legacy_code": "NoSuchEntity"
+    },
+    {
+      "error_format": "legacy",
+      "synthetic_operation": "AssumeRole",
+      "synthetic_code": "AccessDenied",
+      "formatter_returncode": 254,
+      "synthetic_formatted_error": "\naws: [ERROR]: An error occurred (AccessDenied) when calling the AssumeRole operation: SYNTHETIC_OFFLINE_ERROR\n",
+      "actual_assume_adapter_outcome": "Denied",
+      "lifecycle_legacy_code": "AccessDenied"
+    },
+    {
+      "error_format": "legacy",
+      "synthetic_operation": "GetRole",
+      "synthetic_code": "NoSuchEntity",
+      "formatter_returncode": 254,
+      "synthetic_formatted_error": "\naws: [ERROR]: An error occurred (NoSuchEntity) when calling the GetRole operation: SYNTHETIC_OFFLINE_ERROR\n",
+      "actual_assume_adapter_outcome": "Unknown",
+      "lifecycle_legacy_code": "NoSuchEntity"
+    },
+    {
+      "error_format": "json",
+      "synthetic_operation": "AssumeRole",
+      "synthetic_code": "AccessDenied",
+      "formatter_returncode": 254,
+      "synthetic_formatted_error": "{\n    \"Code\": \"AccessDenied\",\n    \"Message\": \"SYNTHETIC_OFFLINE_ERROR\"\n}\n",
+      "actual_assume_adapter_outcome": "Unknown",
+      "lifecycle_legacy_code": null
+    },
+    {
+      "error_format": "json",
+      "synthetic_operation": "GetRole",
+      "synthetic_code": "NoSuchEntity",
+      "formatter_returncode": 254,
+      "synthetic_formatted_error": "{\n    \"Code\": \"NoSuchEntity\",\n    \"Message\": \"SYNTHETIC_OFFLINE_ERROR\"\n}\n",
+      "actual_assume_adapter_outcome": "Unknown",
+      "lifecycle_legacy_code": null
+    }
+  ],
+  "source_sha256": {
+    "/opt/homebrew/Cellar/awscli/2.34.40/libexec/lib/python3.14/site-packages/awscli/__init__.py": "532312573f66fafb2da8d3944c85ae3919c002702f35ff9ffc5937bbed50f3c4",
+    "/opt/homebrew/Cellar/awscli/2.34.40/libexec/lib/python3.14/site-packages/awscli/errorhandler.py": "5e0d094069ea7e5e6edf1ec34ffa8e8f94051fea41db0aebc89ac45d113033ad",
+    "/opt/homebrew/Cellar/awscli/2.34.40/libexec/lib/python3.14/site-packages/awscli/clidriver.py": "094b6c6877548261772849085cc3402e9cdfdc8747ef087f2e9540283f527a91",
+    "/opt/homebrew/Cellar/awscli/2.34.40/libexec/lib/python3.14/site-packages/awscli/botocore/exceptions.py": "13736c0bc0d2848adc9863052db6a3685088795206b361908e63300dec2ea8a8"
+  },
+  "conclusion": "Default/enhanced actual ClientError format retains legacy envelope and is accepted for synthetic AccessDenied; explicit JSON is rejected. Live format/cause remains unknown."
+}

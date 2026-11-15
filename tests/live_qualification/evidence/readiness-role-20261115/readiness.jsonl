@@ -1,0 +1,4 @@
+{"phase": "ROLE_CREATE_INTENT"}
+{"phase": "ASSUME_ROLE_INTENT", "attempt": 1, "started_monotonic_seconds": 440348.360474416}
+{"phase": "ASSUME_ROLE_OBSERVED", "attempt": 1, "outcome": "Unknown", "elapsed_seconds": 0.6977936250041239}
+{"phase": "CONTROLLER_STOPPED", "report": {"passed": false, "phase": "ASSUME_ROLE_READINESS", "session_count": 0, "issuance": "Unknown", "error": "STS_ISSUANCE_UNKNOWN", "cleanup": {"inline_policy_absent": true, "role_absent": true}}}

@@ -1,0 +1,234 @@
+{
+  "passed": true,
+  "tests": 7,
+  "cases": [
+    {
+      "case": "actual_capture_cleanup_permission",
+      "outcome": "Unknown",
+      "operation": {
+        "service": "sts",
+        "operation": "assume-role",
+        "outcome": "Unknown",
+        "held_child_reaped": true
+      },
+      "actual_mock_wait_calls": 0,
+      "real_subprocess_or_signal": false
+    },
+    {
+      "case": "capture_timeout",
+      "outcome": "Unknown",
+      "operation": {
+        "service": "sts",
+        "operation": "assume-role",
+        "outcome": "Unknown",
+        "held_child_reaped": true
+      }
+    },
+    {
+      "case": "capture_permission",
+      "outcome": "Unknown",
+      "operation": {
+        "service": "sts",
+        "operation": "assume-role",
+        "outcome": "Unknown",
+        "held_child_reaped": true
+      }
+    },
+    {
+      "case": "capture_output_bound",
+      "outcome": "Unknown",
+      "operation": {
+        "service": "sts",
+        "operation": "assume-role",
+        "outcome": "Unknown",
+        "held_child_reaped": true
+      }
+    },
+    {
+      "case": "capture_deadline",
+      "outcome": "Unknown",
+      "operation": {
+        "service": "sts",
+        "operation": "assume-role",
+        "outcome": "Unknown",
+        "held_child_reaped": true
+      }
+    },
+    {
+      "case": "nonzero_ExpiredToken",
+      "outcome": "Unknown",
+      "operation": {
+        "service": "sts",
+        "operation": "assume-role",
+        "outcome": "Unknown",
+        "held_child_reaped": true
+      }
+    },
+    {
+      "case": "nonzero_ValidationError",
+      "outcome": "Unknown",
+      "operation": {
+        "service": "sts",
+        "operation": "assume-role",
+        "outcome": "Unknown",
+        "held_child_reaped": true
+      }
+    },
+    {
+      "case": "nonzero_AccessDeniedException",
+      "outcome": "Unknown",
+      "operation": {
+        "service": "sts",
+        "operation": "assume-role",
+        "outcome": "Unknown",
+        "held_child_reaped": true
+      }
+    },
+    {
+      "case": "nonzero_InvalidClientTokenId",
+      "outcome": "Unknown",
+      "operation": {
+        "service": "sts",
+        "operation": "assume-role",
+        "outcome": "Unknown",
+        "held_child_reaped": true
+      }
+    },
+    {
+      "case": "nonzero_empty",
+      "outcome": "Unknown",
+      "operation": {
+        "service": "sts",
+        "operation": "assume-role",
+        "outcome": "Unknown",
+        "held_child_reaped": true
+      }
+    },
+    {
+      "case": "exact_access_denied",
+      "outcome": "Denied",
+      "operation": {
+        "service": "sts",
+        "operation": "assume-role",
+        "outcome": "Denied",
+        "held_child_reaped": true
+      }
+    },
+    {
+      "case": "normal_success",
+      "outcome": "Issued",
+      "operation": {
+        "service": "sts",
+        "operation": "assume-role",
+        "outcome": "Issued",
+        "held_child_reaped": true
+      }
+    },
+    {
+      "case": "whitespace_success",
+      "outcome": "Issued",
+      "operation": {
+        "service": "sts",
+        "operation": "assume-role",
+        "outcome": "Issued",
+        "held_child_reaped": true
+      }
+    },
+    {
+      "case": "empty_stdout",
+      "outcome": "Unknown",
+      "operation": {
+        "service": "sts",
+        "operation": "assume-role",
+        "outcome": "Unknown",
+        "held_child_reaped": true
+      }
+    },
+    {
+      "case": "invalid_json",
+      "outcome": "Unknown",
+      "operation": {
+        "service": "sts",
+        "operation": "assume-role",
+        "outcome": "Unknown",
+        "held_child_reaped": true
+      }
+    },
+    {
+      "case": "wrong_top_level",
+      "outcome": "Unknown",
+      "operation": {
+        "service": "sts",
+        "operation": "assume-role",
+        "outcome": "Unknown",
+        "held_child_reaped": true
+      }
+    },
+    {
+      "case": "missing_arn",
+      "outcome": "Unknown",
+      "operation": {
+        "service": "sts",
+        "operation": "assume-role",
+        "outcome": "Unknown",
+        "held_child_reaped": true
+      }
+    },
+    {
+      "case": "mismatched_arn",
+      "outcome": "Unknown",
+      "operation": {
+        "service": "sts",
+        "operation": "assume-role",
+        "outcome": "Unknown",
+        "held_child_reaped": true
+      }
+    },
+    {
+      "case": "missing_credentials",
+      "outcome": "Unknown",
+      "operation": {
+        "service": "sts",
+        "operation": "assume-role",
+        "outcome": "Unknown",
+        "held_child_reaped": true
+      }
+    },
+    {
+      "case": "missing_token",
+      "outcome": "Unknown",
+      "operation": {
+        "service": "sts",
+        "operation": "assume-role",
+        "outcome": "Unknown",
+        "held_child_reaped": true
+      }
+    },
+    {
+      "case": "wrong_secret_type",
+      "outcome": "Unknown",
+      "operation": {
+        "service": "sts",
+        "operation": "assume-role",
+        "outcome": "Unknown",
+        "held_child_reaped": true
+      }
+    }
+  ],
+  "frozen_before": {
+    "live_adapter.py": "00a43290b57c5e0295122c20ba17fa2ee83952ea149c0e3b42126578701428bd",
+    "controller.py": "4a5c03a37454406087744ea709dd2c4ba5c39c22345ae77485c1f5c7598168f1",
+    "lifecycle.py": "3cc908a7154a8378574f8fb0129bbad9fbe0e1765f9b092b8ad422717353a2af",
+    "SHA256SUMS.json": "db92549ba01d84a4decc492779f98c517062162d3e4604a7679fb26782b5c19b"
+  },
+  "frozen_after": {
+    "live_adapter.py": "00a43290b57c5e0295122c20ba17fa2ee83952ea149c0e3b42126578701428bd",
+    "controller.py": "4a5c03a37454406087744ea709dd2c4ba5c39c22345ae77485c1f5c7598168f1",
+    "lifecycle.py": "3cc908a7154a8378574f8fb0129bbad9fbe0e1765f9b092b8ad422717353a2af",
+    "SHA256SUMS.json": "db92549ba01d84a4decc492779f98c517062162d3e4604a7679fb26782b5c19b"
+  },
+  "real_subprocesses": false,
+  "real_signals": false,
+  "provider_or_native_execution": false,
+  "actual_live_issuance_remains": "Unknown"
+}

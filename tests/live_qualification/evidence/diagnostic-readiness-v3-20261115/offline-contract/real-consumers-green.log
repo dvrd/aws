@@ -1,0 +1,11 @@
+test_actual_campaign_complete_once_no_replay (test_real_consumers.RealConsumers.test_actual_campaign_complete_once_no_replay) ... ok
+test_actual_campaign_malformed_native_retains_intent (test_real_consumers.RealConsumers.test_actual_campaign_malformed_native_retains_intent) ... ok
+test_actual_campaign_read_denial_never_puts (test_real_consumers.RealConsumers.test_actual_campaign_read_denial_never_puts) ... ok
+test_actual_campaign_unknown_put_retains_intent_no_replay (test_real_consumers.RealConsumers.test_actual_campaign_unknown_put_retains_intent_no_replay) ... ok
+test_actual_guard_same_triple_and_wrong_role (test_real_consumers.RealConsumers.test_actual_guard_same_triple_and_wrong_role) ... ok
+test_actual_native_read_keeps_prepared (test_real_consumers.RealConsumers.test_actual_native_read_keeps_prepared) ... ok
+
+----------------------------------------------------------------------
+Ran 6 tests in 0.066s
+
+OK

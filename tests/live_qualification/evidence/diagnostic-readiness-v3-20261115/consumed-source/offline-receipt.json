@@ -1,0 +1,47 @@
+{
+  "preparation_only": true,
+  "authorized": false,
+  "executed": false,
+  "offline_test_methods": 43,
+  "installed_cli_test_methods": 3,
+  "installed_formatter_variants": 36,
+  "all_controls_passed": true,
+  "final_input_hashes_match": true,
+  "v1_frozen_inputs_unchanged": true,
+  "v1_manifest_sha256": "7b2b0c919603d082ceeeff3f4ac61080e308b878b24880a1fbd6745dd9f8ae87",
+  "owner_commit": "8010f8cd2b5f9e8a144fb85ef90ff7dff8fd9bc1",
+  "selected_corrections": [
+    "ps helper close-fault retirement containment",
+    "ECHILD reservation loss: no group lookup/signal/wait or fabricated exit",
+    "STS/GetObject service classification requires exact254"
+  ],
+  "actual_owned_python_stubs": true,
+  "actual_owned_externally_reaped_echild": true,
+  "fixed_ps_metadata": true,
+  "no_aws_cli_or_provider_calls": true,
+  "no_native_probe_execution": true,
+  "prior_actual_issuance": "Unknown",
+  "accepted_count_not_actual_session_total": true,
+  "campaign_directory_absent": true,
+  "no_common_production_api_change": true,
+  "offline_commands": [
+    [
+      "python3",
+      "-B",
+      "-m",
+      "unittest",
+      "discover",
+      "-p",
+      "test_*.py"
+    ],
+    [
+      "/opt/homebrew/Cellar/awscli/2.34.40/libexec/bin/python",
+      "-B",
+      "installed_cli_controls.py"
+    ]
+  ],
+  "v2_frozen_inputs_unchanged": true,
+  "v2_manifest_sha256": "791e191e4c0bea72fed21f2ec931d4454bc117bb4bdf07dab349ad723a7bb0f6",
+  "v3_narrow_correction": "Non-ECHILD observation failure suppresses lookup/signals but does not disown; bounded owned wait remains attempted.",
+  "installed_cli_proof_reused_from_frozen_v2": true
+}

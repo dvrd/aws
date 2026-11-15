@@ -1,0 +1,33 @@
+{
+  "actual_passed": false,
+  "actual_controller_phase": "ASSUME_ROLE_READINESS",
+  "session_count": 1,
+  "session_count_semantics": "VerifiedAcceptedOnly",
+  "issuance": "Issued",
+  "sts_outcomes": [
+    "Denied",
+    "Issued"
+  ],
+  "first_sts_returncode": 254,
+  "first_error_code": "AccessDenied",
+  "first_retry_info": "Zero",
+  "second_sts_returncode": 0,
+  "maintained_transport_returncode": 0,
+  "guard_completed": false,
+  "no_credential_attestation": true,
+  "no_cli_s3_readiness_intent": true,
+  "no_native_readiness_or_campaign_intent": true,
+  "no_s3_qualification": true,
+  "no_ses": true,
+  "prepared_state_unchanged_phase": true,
+  "capture_diagnostics_count": 16,
+  "capture_records_all_verified_reaped": true,
+  "cleanup_owned_policy_and_role_absent": true,
+  "prior_issuance_unknown_not_reclassified": true,
+  "consumed_packet_manifest_sha256": "cfb898623552ef6d5bcffdd4eea9cf59928cb6807b4ffed2ee0eb5e9034a1e15",
+  "owner_source_before_run": "8010f8cd2b5f9e8a144fb85ef90ff7dff8fd9bc1",
+  "offline_tests": 43,
+  "reused_installed_cli_tests": 3,
+  "installed_formatter_variants": 36,
+  "limitations": "Transport rc0 is not a completed identity/expiry guard. BACKEND_FAILURE reason not identified by this evidence. No replay or propagation-cause claim."
+}

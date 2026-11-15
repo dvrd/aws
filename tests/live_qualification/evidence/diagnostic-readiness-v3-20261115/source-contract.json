@@ -1,0 +1,19 @@
+{
+  "kind": "immutable source-contract review",
+  "maintained_capture_return_arity": 2,
+  "plan_local_shim_return_arity": 3,
+  "maintained_credentials_unpack_arity": 2,
+  "common_capture_line": 225,
+  "common_return_line": 240,
+  "environment_credentials_unpack_line": 284,
+  "plan_local_shim_return_line": 36,
+  "source_sha256": {
+    "/Users/kakurega/dev/oss/Odin/shared/aws/tests/live_qualification/run.py": "9920b5814d51dbac8ace1d0d54e2eea2843f2068038fb36d27c18c2591193811",
+    "/tmp/aws416-readiness-plan-20261115-diagnostics-v3-7a1fc78b/live_adapter.py": "0129cda3ba9723b516310a8660bb7ec1f56e0b06b8ee98f61a64085d96335519"
+  },
+  "live_exception_text_retained": false,
+  "no_provider_or_process_execution": true,
+  "limitation": "Source contract explains the local guard boundary; actual saved error label remains BACKEND_FAILURE. No S3 or later readiness result inferred.",
+  "actual_consumer_offline_red_proved": true,
+  "new_preparation_only_correction_green_tests": 6
+}

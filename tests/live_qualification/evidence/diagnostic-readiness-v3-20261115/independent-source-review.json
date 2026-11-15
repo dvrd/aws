@@ -1,0 +1,19 @@
+{
+  "review": "selected corrections source review passed",
+  "packet": "/tmp/aws416-readiness-plan-20261115-diagnostics-v3-7a1fc78b",
+  "manifest_sha256": "cfb898623552ef6d5bcffdd4eea9cf59928cb6807b4ffed2ee0eb5e9034a1e15",
+  "all_36_manifest_inputs_verified": true,
+  "v1_v2_frozen_inputs_unchanged": true,
+  "strict_service_error_exit_code": 254,
+  "actual_waitpid_required": true,
+  "echild_stops_lookup_signal_and_reap": true,
+  "non_echild_observation_fault_attempts_bounded_owned_reap_without_signalling": true,
+  "ps_helper_close_faults_cannot_bypass_retirement": true,
+  "safe_diagnostics_no_credentials": true,
+  "no_provider_cli_or_actual_process_execution_by_reviewer": true,
+  "prior_issuance": "Unknown",
+  "limitations": [
+    "No cloud/session/readiness/effective-authorization result or execution approval.",
+    "Actual owned-stub test results are retained owner evidence; reviewer performed source/hash review only."
+  ]
+}

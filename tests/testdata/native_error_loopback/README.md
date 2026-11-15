@@ -16,15 +16,19 @@ are public synthetic literals; ambient credentials/config files are never read.
 The existing test-only localhost certificate/key is selected explicitly using the
 public `S3_Config.ca_file` option. No system trust, SDK API or deadline is changed.
 
-The peer returns fixed 403/429/503 errors, including synthetic ExpiredToken and
-SlowDown bodies. Public write results preserve the HTTP status with `ok=false`
+The peer follows the official [S3 error mapping](https://docs.aws.amazon.com/AmazonS3/latest/API/API_Error.html):
+400/ExpiredToken, 403/AccessDenied and 503/SlowDown. The additional429 case uses
+SyntheticHTTP429 and is generic HTTP robustness, not a documented S3 pairing. Public write results preserve the HTTP status with `ok=false`
 and `transport_ok=true`: that is a completed non-success HTTP response, not a
 transport failure. One signed request is observed for each operation; no retry or
-redirect follows. Successful PUT200/DELETE204 controls protect the opposite branch.
+redirect follows. The earlier9381a75 ASan PUT200/DELETE204 controls retain their separate validity;
+this corrected run repeats only changed error cases and negative controls.
 Wrong-CA controls reject TLS before any HTTP request. A deliberately wrong expected
 status proves the driver returns nonzero instead of accepting any completed reply.
-All reported fields are fixed booleans/numbers; neither response messages nor
-credentials, request headers or raw response bytes enter the native result/report.
+Native result fields remain fixed booleans/numbers. The Python peer report adds
+an allowlisted response_error_code label describing the synthetic response it
+sent, not SDK XML classification; NotSent identifies a TLS-negative case. Neither
+response messages nor credentials, headers or raw response bytes enter reports.
 
 The loopback peer checks the exact method/path/body, SigV4 and session-token header
 presence. This is not an independent HMAC/signature oracle; existing deterministic

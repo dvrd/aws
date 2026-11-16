@@ -1,8 +1,0 @@
-test_actual_global_argument_parser_accepts_all_prepared_requests (__main__.InstalledCLIControls.test_actual_global_argument_parser_accepts_all_prepared_requests) ... ok
-test_actual_retry_formatter_all_target_operations (__main__.InstalledCLIControls.test_actual_retry_formatter_all_target_operations) ... ok
-test_actual_sts_output_shape_and_json_datetime_schema (__main__.InstalledCLIControls.test_actual_sts_output_shape_and_json_datetime_schema) ... ok
-
-----------------------------------------------------------------------
-Ran 3 tests in 0.006s
-
-OK

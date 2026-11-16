@@ -1,6 +1,0 @@
-{"phase": "ROLE_CREATE_INTENT"}
-{"phase": "ASSUME_ROLE_INTENT", "attempt": 1, "started_monotonic_seconds": 446555.831538583}
-{"phase": "ASSUME_ROLE_OBSERVED", "attempt": 1, "outcome": "Denied", "code": "AccessDenied", "elapsed_seconds": 0.6901516250218265}
-{"phase": "ASSUME_ROLE_INTENT", "attempt": 2, "started_monotonic_seconds": 446561.526739083}
-{"phase": "ASSUME_ROLE_OBSERVED", "attempt": 2, "outcome": "Issued", "code": "None", "elapsed_seconds": 0.7097935000201687}
-{"phase": "CONTROLLER_STOPPED", "report": {"passed": false, "phase": "ASSUME_ROLE_READINESS", "session_count": 1, "session_count_semantics": "VerifiedAcceptedOnly", "issuance": "Issued", "error": "BACKEND_FAILURE", "cleanup": {"inline_policy_absent": true, "role_absent": true}}}

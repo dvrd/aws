@@ -1,5 +1,0 @@
---- consumed-v3/live_adapter.py
-+++ proposed-offline-only/live_adapter.py
-@@
--            return result.returncode,result.stdout,result.stderr
-+            return result.returncode,result.stdout

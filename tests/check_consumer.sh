@@ -8,7 +8,7 @@ trap 'rm -rf -- "$work"' EXIT
 trap 'exit 130' INT
 trap 'exit 143' TERM HUP
 mkdir "$work/shared" "$work/consumer"
-for package in aws files surf http websocket async; do
+for package in aws surf http websocket async; do
     mkdir "$work/shared/$package"
     tar -C "$root/$package" --exclude=.git --exclude=__pycache__ --exclude='*.pyc' -cf - . |
         tar -C "$work/shared/$package" -xf -
@@ -16,11 +16,10 @@ done
 cat > "$work/consumer/main.odin" <<'ODIN'
 package main
 import aws "shared:aws"
-import files "shared:files"
 main :: proc() {
     assert(aws.s3_config_error({bucket="examplebucket", region="us-east-1"}) == "")
     assert(aws.ses_config_valid({region="us-east-1", sender="from@example.test", recipient="to@example.test"}))
-    _, error := files.read_limited("", 65536)
+    _, error := aws.read_limited("", 65536)
     assert(error.kind == .Invalid_Input)
 }
 ODIN

@@ -1,6 +1,5 @@
 package aws
 
-import files "../files"
 import network_client "../surf"
 import "core:encoding/json"
 import "core:fmt"
@@ -113,7 +112,7 @@ aws_credentials_read_profile :: proc(
 	path, profile: string,
 ) -> (
 	credentials: AWS_Credentials,
-	error: files.Read_Error,
+	error: Read_Error,
 ) {
 	credentials, _, _, error = credential_profile_load(path, profile, false)
 	return
@@ -809,9 +808,9 @@ credential_profile_load :: proc(
 	credentials: AWS_Credentials,
 	unsupported: Credential_Unsupported,
 	data: []byte,
-	error: files.Read_Error,
+	error: Read_Error,
 ) {
-	data, error = files.read_limited(path, 64 * 1024, context.temp_allocator, erase_on_failure = true)
+	data, error = read_limited(path, 64 * 1024, context.temp_allocator, erase_on_failure = true)
 	if error.kind != .None {
 		return {}, {}, nil, error
 	}

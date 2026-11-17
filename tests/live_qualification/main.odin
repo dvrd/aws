@@ -2,7 +2,6 @@ package main
 
 import aws "shared:aws"
 import surf "shared:surf"
-import files "shared:files"
 import "core:crypto/sha2"
 import "core:encoding/hex"
 import "core:encoding/json"
@@ -136,7 +135,7 @@ main_run :: proc() -> Result {
  case "ses": action = .SES
  case: return {reason = .Invalid_Arguments}
  }
- bytes, read_error := files.read_limited(os.args[2], 16384)
+ bytes, read_error := aws.read_limited(os.args[2], 16384)
  if read_error.kind != .None {return {reason = .Invalid_Scope}}
  defer delete(bytes)
  hash: sha2.Context_256

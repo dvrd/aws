@@ -29,25 +29,31 @@ load_s3_config :: proc() -> S3_Config {
 		bucket = os.get_env("AWS_S3_BUCKET", context.allocator),
 		region = os.get_env("AWS_REGION", context.allocator),
 	}
+
 	if config.region == "" do config.region = os.get_env("AWS_DEFAULT_REGION", context.allocator)
+
 	return config
 }
 
 s3_config_error :: proc(config: S3_Config) -> string {
 	if config.bucket == "" do return ""
+
 	if len(config.bucket) < 3 || len(config.bucket) > 63 || config.region == "" {
 		return "S3 requires AWS_S3_BUCKET and AWS_REGION"
 	}
+
 	for ch in config.bucket {
 		if !is_lower(ch) && !is_digit(ch) && ch != '-' && ch != '.' {
 			return "Invalid S3 bucket name"
 		}
 	}
+
 	for ch in config.region {
 		if !region_char_valid(ch) {
 			return "Invalid AWS region"
 		}
 	}
+
 	if config.endpoint != "" {
 		if !strings.has_prefix(config.endpoint, "https://") ||
 		   strings.contains_any(config.endpoint[8:], "/?#@\r\n") ||
@@ -55,6 +61,7 @@ s3_config_error :: proc(config: S3_Config) -> string {
 			return "S3 endpoint must be an HTTPS origin"
 		}
 	}
+
 	return ""
 }
 
@@ -83,16 +90,7 @@ s3_put_at :: proc(
 	now: time.Time,
 	http_execute: HTTP_Execute = network_client.buffered_http_execute,
 ) -> S3_Result {
-	return s3_object_request_at(
-		config,
-		credentials,
-		"PUT",
-		key,
-		body,
-		content_type,
-		now,
-		http_execute = http_execute,
-	)
+	return s3_object_request_at(config, credentials, "PUT", key, body, content_type, now, http_execute = http_execute)
 }
 
 // Stream a file with a fixed buffer, avoiding an archive-sized allocation.
@@ -102,16 +100,7 @@ s3_put_file :: proc(
 	key, path, content_type: string,
 	http_execute: HTTP_Execute = network_client.buffered_http_execute,
 ) -> S3_Result {
-	return s3_put_file_internal(
-		config,
-		credentials,
-		key,
-		path,
-		content_type,
-		{},
-		false,
-		http_execute,
-	)
+	return s3_put_file_internal(config, credentials, key, path, content_type, {}, false, http_execute)
 }
 
 s3_put_file_at :: proc(
@@ -121,16 +110,7 @@ s3_put_file_at :: proc(
 	now: time.Time,
 	http_execute: HTTP_Execute = network_client.buffered_http_execute,
 ) -> S3_Result {
-	return s3_put_file_internal(
-		config,
-		credentials,
-		key,
-		path,
-		content_type,
-		now,
-		true,
-		http_execute,
-	)
+	return s3_put_file_internal(config, credentials, key, path, content_type, now, true, http_execute)
 }
 
 @(private)
@@ -194,16 +174,7 @@ s3_delete_at :: proc(
 	now: time.Time,
 	http_execute: HTTP_Execute = network_client.buffered_http_execute,
 ) -> S3_Result {
-	return s3_object_request_at(
-		config,
-		credentials,
-		"DELETE",
-		key,
-		nil,
-		"",
-		now,
-		http_execute = http_execute,
-	)
+	return s3_object_request_at(config, credentials, "DELETE", key, nil, "", now, http_execute = http_execute)
 }
 
 @(private)
@@ -230,16 +201,7 @@ s3_object_request_at :: proc(
 	origin, host, path := s3_location(config, key)
 	stamp := s3_timestamp(now)
 	digest := file_digest if file != nil else s3_sha256(body)
-	headers := s3_object_headers(
-		config,
-		credentials,
-		method,
-		host,
-		path,
-		digest,
-		stamp,
-		content_type,
-	)
+	headers := s3_object_headers(config, credentials, method, host, path, digest, stamp, content_type)
 	_, result := http_execute(
 		method,
 		fmt.tprintf("%s%s", origin, path),
@@ -259,38 +221,17 @@ s3_object_headers :: proc(
 	credentials: AWS_Credentials,
 	method, host, path, digest, stamp, content_type: string,
 ) -> []string {
-	canonical_headers := fmt.tprintf(
-		"host:%s\nx-amz-content-sha256:%s\nx-amz-date:%s\n",
-		host,
-		digest,
-		stamp,
-	)
+	canonical_headers := fmt.tprintf("host:%s\nx-amz-content-sha256:%s\nx-amz-date:%s\n", host, digest, stamp)
 	signed := "host;x-amz-content-sha256;x-amz-date"
 	headers := make([dynamic]string, 0, 8, context.temp_allocator)
-	append(
-		&headers,
-		fmt.tprintf("x-amz-content-sha256: %s", digest),
-		fmt.tprintf("x-amz-date: %s", stamp),
-		"Expect:",
-	)
+	append(&headers, fmt.tprintf("x-amz-content-sha256: %s", digest), fmt.tprintf("x-amz-date: %s", stamp), "Expect:")
 	if content_type != "" do append(&headers, fmt.tprintf("Content-Type: %s", content_type))
 	if credentials.session_token != "" {
-		canonical_headers = fmt.tprintf(
-			"%sx-amz-security-token:%s\n",
-			canonical_headers,
-			credentials.session_token,
-		)
+		canonical_headers = fmt.tprintf("%sx-amz-security-token:%s\n", canonical_headers, credentials.session_token)
 		signed = fmt.tprintf("%s;x-amz-security-token", signed)
 		append(&headers, fmt.tprintf("x-amz-security-token: %s", credentials.session_token))
 	}
-	canonical := fmt.tprintf(
-		"%s\n%s\n\n%s\n%s\n%s",
-		method,
-		path,
-		canonical_headers,
-		signed,
-		digest,
-	)
+	canonical := fmt.tprintf("%s\n%s\n\n%s\n%s\n%s", method, path, canonical_headers, signed, digest)
 	scope := fmt.tprintf("%s/%s/s3/aws4_request", stamp[:8], config.region)
 	signature := s3_signature(credentials.secret_key, config.region, stamp, scope, canonical)
 	append(
@@ -353,11 +294,7 @@ s3_download_url_at :: proc(
 		expires_seconds,
 	)
 	if credentials.session_token != "" {
-		query = fmt.tprintf(
-			"%s&X-Amz-Security-Token=%s",
-			query,
-			s3_encode(credentials.session_token),
-		)
+		query = fmt.tprintf("%s&X-Amz-Security-Token=%s", query, s3_encode(credentials.session_token))
 	}
 	query = fmt.tprintf("%s&X-Amz-SignedHeaders=host", query)
 	canonical := fmt.tprintf("GET\n%s\n%s\nhost:%s\n\nhost\nUNSIGNED-PAYLOAD", path, query, host)
@@ -369,25 +306,24 @@ s3_location :: proc(config: S3_Config, key: string) -> (origin, host, path: stri
 	origin = config.endpoint
 	suffix := "amazonaws.com.cn" if strings.has_prefix(config.region, "cn-") else "amazonaws.com"
 	path_style := config.path_style || strings.contains(config.bucket, ".")
+
 	if origin == "" {
 		if path_style do origin = fmt.tprintf("https://s3.%s.%s", config.region, suffix)
 		else do origin = fmt.tprintf("https://%s.s3.%s.%s", config.bucket, config.region, suffix)
 	}
+
 	host = origin[8:]
 	path = fmt.tprintf("/%s", s3_encode(key, true))
 	if path_style do path = fmt.tprintf("/%s%s", config.bucket, path)
+
 	return
 }
 
 s3_encode :: proc(text: string, keep_slashes := false) -> string {
 	builder := strings.builder_make(allocator = context.temp_allocator)
+
 	for ch in transmute([]byte)text {
-		if is_alphanumeric(ch) ||
-		   ch == '-' ||
-		   ch == '_' ||
-		   ch == '.' ||
-		   ch == '~' ||
-		   keep_slashes && ch == '/' {
+		if is_alphanumeric(ch) || ch == '-' || ch == '_' || ch == '.' || ch == '~' || keep_slashes && ch == '/' {
 			strings.write_byte(&builder, ch)
 		} else {
 			digits := "0123456789ABCDEF"
@@ -396,45 +332,38 @@ s3_encode :: proc(text: string, keep_slashes := false) -> string {
 			strings.write_byte(&builder, digits[ch & 15])
 		}
 	}
+
 	return strings.to_string(builder)
 }
 
 s3_sha256 :: proc(data: []byte) -> string {
 	digest: [32]byte
 	hash.hash(.SHA256, data, digest[:])
+
 	return string(hex.encode(digest[:], allocator = context.temp_allocator))
 }
 
-s3_signature :: proc(
-	secret, region, stamp, scope, canonical: string,
-	service: string = "s3",
-) -> string {
+s3_signature :: proc(secret, region, stamp, scope, canonical: string, service: string = "s3") -> string {
 	key: [32]byte
-	hmac.sum(
-		.SHA256,
-		key[:],
-		transmute([]byte)stamp[:8],
-		transmute([]byte)fmt.tprintf("AWS4%s", secret),
-	)
+	hmac.sum(.SHA256, key[:], transmute([]byte)stamp[:8], transmute([]byte)fmt.tprintf("AWS4%s", secret))
+
 	for text in ([]string{region, service, "aws4_request"}) {
 		next: [32]byte
 		hmac.sum(.SHA256, next[:], transmute([]byte)text, key[:])
 		key = next
 	}
-	to_sign := fmt.tprintf(
-		"AWS4-HMAC-SHA256\n%s\n%s\n%s",
-		stamp,
-		scope,
-		s3_sha256(transmute([]byte)canonical),
-	)
+
+	to_sign := fmt.tprintf("AWS4-HMAC-SHA256\n%s\n%s\n%s", stamp, scope, s3_sha256(transmute([]byte)canonical))
 	signature: [32]byte
 	hmac.sum(.SHA256, signature[:], transmute([]byte)to_sign, key[:])
+
 	return string(hex.encode(signature[:], allocator = context.temp_allocator))
 }
 
 s3_timestamp :: proc(now: time.Time) -> string {
 	year, month, day := time.date(now)
 	hour, minute, second := time.clock(now)
+
 	return fmt.tprintf("%04d%02d%02dT%02d%02d%02dZ", year, int(month), day, hour, minute, second)
 }
 
@@ -443,11 +372,7 @@ S3_GET_TIMEOUT_MS :: 120000
 S3_GET_HEADERS_MAX :: 8
 
 @(private)
-s3_get_native_config :: proc(
-	timeout_ms: i64,
-	bytes_max: int,
-	roots: []^x509.Certificate,
-) -> network_client.Config {
+s3_get_native_config :: proc(timeout_ms: i64, bytes_max: int, roots: []^x509.Certificate) -> network_client.Config {
 	return {
 		max_body_size = max(bytes_max, 1),
 		timeout = time.Duration(timeout_ms) * time.Millisecond,
@@ -538,6 +463,7 @@ s3_get_at :: proc(
 		if body != nil {
 			delete(body, allocator)
 		}
+
 		return nil, error
 	}
 	return body, .None
@@ -567,18 +493,22 @@ s3_get_native :: proc(
 	count := 0
 	for line in headers {
 		colon := strings.index_byte(line, ':')
+
 		if colon < 1 || strings.contains_any(line, "\r\n\x00") {
 			return nil, 0, .Invalid_Input
 		}
+
 		value := strings.trim_space(line[colon + 1:])
 		// Empty "Expect:" needs no native header.
 		if value == "" {
 			continue
 		}
+
 		fields[count] = {
 			name  = line[:colon],
 			value = value,
 		}
+
 		count += 1
 	}
 	// A nil root slice means omitted trust and fails before dial. This non-nil

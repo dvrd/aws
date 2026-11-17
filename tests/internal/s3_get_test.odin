@@ -32,7 +32,8 @@ s3_get_fixture_execute :: proc(
 	int,
 	S3_Get_Error,
 ) {
-	s := s3_get_fixture; s.calls += 1
+	s := s3_get_fixture
+	s.calls += 1
 	testing.expect_value(s.t, url, "https://examplebucket.s3.us-east-1.amazonaws.com/a%20b/c%2Bd")
 	testing.expect_value(s.t, timeout_ms, i64(S3_GET_TIMEOUT_MS))
 	testing.expect_value(s.t, bytes_max, s.limit)
@@ -50,29 +51,38 @@ s3_get_fixture_execute :: proc(
 	testing.expect(s.t, strings.has_prefix(headers[0], "x-amz-content-sha256: e3b0c442"))
 	testing.expect_value(s.t, headers[1], "x-amz-date: 20130524T000000Z")
 	testing.expect_value(s.t, headers[3], "x-amz-security-token: fixture/token+value")
-	data := make([]u8, s.body_size, allocator); for &b in data {b = 42}
+	data := make([]u8, s.body_size, allocator)
+	for &b in data {
+		b = 42
+	}
 	return data, s.status, s.error
 }
 
 @(test)
 s3_get_promotes_signed_bounded_owned_reads :: proc(t: ^testing.T) {
-	sync.mutex_lock(&aws_test_http_mutex); defer sync.mutex_unlock(&aws_test_http_mutex)
+	sync.mutex_lock(&aws_test_http_mutex)
+	defer sync.mutex_unlock(&aws_test_http_mutex)
 	fixture := S3_Get_Fixture {
 		t         = t,
 		status    = 200,
 		body_size = 7,
 		limit     = 8,
 	}; s3_get_fixture = &fixture
-	defer {s3_get_fixture = nil}
+	defer {
+		s3_get_fixture = nil
+	}
+
 	config := S3_Config {
 		bucket = "examplebucket",
 		region = "us-east-1",
 	}
+
 	credentials := AWS_Credentials {
 		"AKIAIOSFODNN7EXAMPLE",
 		"wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY",
 		"fixture/token+value",
 	}
+
 	body, e := s3_get_at(
 		config,
 		credentials,
@@ -84,27 +94,34 @@ s3_get_promotes_signed_bounded_owned_reads :: proc(t: ^testing.T) {
 	)
 	defer delete(body)
 	testing.expect(t, e == .None && fixture.signed && fixture.calls == 1)
-	testing.expect_value(t, len(body), 7); testing.expect_value(t, body[0], u8(42))
+	testing.expect_value(t, len(body), 7)
+	testing.expect_value(t, body[0], u8(42))
 }
 
 @(test)
 s3_get_maps_status_and_releases_every_failed_body :: proc(t: ^testing.T) {
-	sync.mutex_lock(&aws_test_http_mutex); defer sync.mutex_unlock(&aws_test_http_mutex)
+	sync.mutex_lock(&aws_test_http_mutex)
+	defer sync.mutex_unlock(&aws_test_http_mutex)
 	fixture := S3_Get_Fixture {
 		t         = t,
 		body_size = 7,
 		limit     = 8,
 	}; s3_get_fixture = &fixture
-	defer {s3_get_fixture = nil}
+	defer {
+		s3_get_fixture = nil
+	}
+
 	config := S3_Config {
 		bucket = "examplebucket",
 		region = "us-east-1",
 	}
+
 	credentials := AWS_Credentials {
 		"AKIAIOSFODNN7EXAMPLE",
 		"wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY",
 		"fixture/token+value",
 	}
+
 	cases := []struct {
 		status: int,
 		error:  S3_Get_Error,
@@ -118,6 +135,7 @@ s3_get_maps_status_and_releases_every_failed_body :: proc(t: ^testing.T) {
 		{429, .Unavailable},
 		{503, .Unavailable},
 	}
+
 	for item in cases {
 		fixture.status = item.status
 		body, e := s3_get_at(
@@ -129,9 +147,12 @@ s3_get_maps_status_and_releases_every_failed_body :: proc(t: ^testing.T) {
 			context.allocator,
 			s3_get_fixture_execute,
 		)
-		testing.expect_value(t, e, item.error); testing.expect(t, body == nil)
+		testing.expect_value(t, e, item.error)
+		testing.expect(t, body == nil)
 	}
-	fixture.status = 200; fixture.body_size = 9
+
+	fixture.status = 200
+	fixture.body_size = 9
 	body, e := s3_get_at(
 		config,
 		credentials,
@@ -142,7 +163,8 @@ s3_get_maps_status_and_releases_every_failed_body :: proc(t: ^testing.T) {
 		s3_get_fixture_execute,
 	)
 	testing.expect(t, body == nil && e == .Too_Large)
-	fixture.body_size = 7; fixture.error = .Unavailable
+	fixture.body_size = 7
+	fixture.error = .Unavailable
 	body, e = s3_get_at(
 		config,
 		credentials,
@@ -154,21 +176,17 @@ s3_get_maps_status_and_releases_every_failed_body :: proc(t: ^testing.T) {
 	)
 	testing.expect(t, body == nil && e == .Unavailable)
 	calls := fixture.calls
+
 	for bound in ([]int{-1, S3_GET_BYTES_MAX + 1}) {
-		body, e = s3_get(
-			config,
-			credentials,
-			"a b/c+d",
-			bound,
-			context.allocator,
-			s3_get_fixture_execute,
-		)
+		body, e = s3_get(config, credentials, "a b/c+d", bound, context.allocator, s3_get_fixture_execute)
 		testing.expect(t, body == nil && e == .Invalid_Input)
 	}
+
 	_, e = s3_get(config, {}, "key", 8, context.allocator, s3_get_fixture_execute)
 	testing.expect_value(t, e, .Invalid_Input)
 	_, e = s3_get(config, credentials, "", 8, context.allocator, s3_get_fixture_execute)
-	testing.expect_value(t, e, .Invalid_Input); testing.expect_value(t, fixture.calls, calls)
+	testing.expect_value(t, e, .Invalid_Input)
+	testing.expect_value(t, fixture.calls, calls)
 }
 
 @(test)
@@ -177,30 +195,19 @@ s3_get_native_rejects_invalid_public_bounds_and_header_injection :: proc(t: ^tes
 			bound:   int,
 			timeout: i64,
 		}{{-1, 1000}, {S3_GET_BYTES_MAX + 1, 1000}, {1, 0}, {1, S3_GET_TIMEOUT_MS + 1}}) {
-		body, status, e := s3_get_native(
-			"invalid-url",
-			nil,
-			item.timeout,
-			item.bound,
-			context.allocator,
-		)
+		body, status, e := s3_get_native("invalid-url", nil, item.timeout, item.bound, context.allocator)
 		testing.expect(t, body == nil && status == 0 && e == .Invalid_Input)
 	}
-	for header in ([]string {
-			"missing colon",
-			": empty-name",
-			"x: value\r\nInjected: yes",
-			"x: value\x00",
-		}) {
+
+	for header in ([]string{"missing colon", ": empty-name", "x: value\r\nInjected: yes", "x: value\x00"}) {
 		body, status, e := s3_get_native("invalid-url", {header}, 1000, 8, context.allocator)
 		testing.expect(t, body == nil && status == 0 && e == .Invalid_Input)
 	}
+
 	headers: [S3_GET_HEADERS_MAX + 1]string
 	body, status, e := s3_get_native("invalid-url", headers[:], 1000, 8, context.allocator)
 	testing.expect(t, body == nil && status == 0 && e == .Invalid_Input)
-	fmt.println(
-		"S3 GET failure bodies released by the caller allocator; native input rejected before I/O",
-	)
+	fmt.println("S3 GET failure bodies released by the caller allocator; native input rejected before I/O")
 }
 
 @(test)

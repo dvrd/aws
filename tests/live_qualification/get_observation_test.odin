@@ -3,7 +3,6 @@ import aws "shared:aws"
 import surf "shared:surf"
 import "core:encoding/json"
 import "core:mem"
-import "core:os"
 import "core:strings"
 import "core:testing"
 
@@ -57,20 +56,7 @@ observed_fixture_get :: proc(
 	copy(body, transmute([]u8)text)
 	return body, status, .None
 }
-observed_fixture_write :: proc(
-	_: string,
-	_: string,
-	_: []u8,
-	_: []string,
-	_: string,
-	_: bool,
-	_: i64,
-	_: ^os.File,
-	_: i64,
-) -> (
-	[]u8,
-	surf.Buffered_HTTP_Result,
-) {
+observed_fixture_write :: proc(_: aws.HTTP_Request) -> ([]u8, surf.Buffered_HTTP_Result) {
 	s := cast(^Observed_Fixture)context.user_ptr
 	s.writes += 1
 	return nil, {}

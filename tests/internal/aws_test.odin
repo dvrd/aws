@@ -76,38 +76,26 @@ AWS_Test_HTTP :: struct {
 aws_test_http_mutex: sync.Mutex
 aws_test_http_state: ^AWS_Test_HTTP
 
-aws_test_http :: proc(
-	method, url: string,
-	body: []u8,
-	headers: []string,
-	ca_file: string,
-	allow_http: bool,
-	timeout_ms: i64,
-	upload_file: ^os.File,
-	upload_size: i64,
-) -> (
-	[]u8,
-	network_client.Buffered_HTTP_Result,
-) {
+aws_test_http :: proc(request: HTTP_Request) -> ([]u8, network_client.Buffered_HTTP_Result) {
 	state := aws_test_http_state
 	state.calls += 1
-	testing.expect_value(state.t, method, state.method)
-	testing.expect_value(state.t, url, state.url)
-	testing.expect(state.t, !allow_http && ca_file == "", "fake peer receives HTTPS policy")
+	testing.expect_value(state.t, request.method, state.method)
+	testing.expect_value(state.t, request.url, state.url)
+	testing.expect(state.t, !request.allow_http && request.ca_file == "", "fake peer receives HTTPS policy")
 	if state.file_body {
-		testing.expect(state.t, upload_file != nil && upload_size == 7 && timeout_ms == 120000)
+		testing.expect(state.t, request.upload_file != nil && request.upload_size == 7 && request.timeout_ms == 120000)
 		buffer: [7]u8
-		n, error := os.read(upload_file, buffer[:])
+		n, error := os.read(request.upload_file, buffer[:])
 		testing.expect(state.t, error == nil && n == 7 && string(buffer[:]) == "payload")
 	} else {
-		testing.expect(state.t, upload_file == nil && upload_size == 0 && timeout_ms == 15000)
+		testing.expect(state.t, request.upload_file == nil && request.upload_size == 0 && request.timeout_ms == 15000)
 
 		if state.body != "" {
-			testing.expect_value(state.t, string(body), state.body)
+			testing.expect_value(state.t, string(request.body), state.body)
 		}
 	}
 	auth, date := false, false
-	for header in headers {
+	for header in request.headers {
 		if strings.has_prefix(header, "Authorization: AWS4-HMAC-SHA256 Credential=fixture-key/") {
 			auth = true
 		}
@@ -144,13 +132,13 @@ s3_operations_use_injected_http_without_network :: proc(t: ^testing.T) {
 		aws_test_http_state = nil
 	}
 
-	result := s3_put(config, credentials, "a b", transmute([]u8)state.body, "text/plain", aws_test_http)
+	result := s3_put(config, credentials, "a b", transmute([]u8)state.body, "text/plain", http_execute = aws_test_http)
 	testing.expect(t, result.ok && result.status == 200 && state.calls == 1)
 	state.method = "DELETE"
 	state.body = ""
-	result = s3_delete(config, credentials, "a b", aws_test_http)
+	result = s3_delete(config, credentials, "a b", http_execute = aws_test_http)
 	testing.expect(t, result.ok && state.calls == 2)
-	result = s3_put(config, {}, "a b", nil, "text/plain", aws_test_http)
+	result = s3_put(config, {}, "a b", nil, "text/plain", http_execute = aws_test_http)
 	testing.expect(t, !result.ok && state.calls == 2, "invalid credentials never reach HTTP")
 
 	directory, error := os.make_directory_temp("", "aws-upload-*", context.allocator)
@@ -167,7 +155,7 @@ s3_operations_use_injected_http_without_network :: proc(t: ^testing.T) {
 	testing.expect(t, os.write_entire_file(path, "payload") == nil)
 	state.method = "PUT"
 	state.file_body = true
-	result = s3_put_file(config, credentials, "a b", path, "text/plain", aws_test_http)
+	result = s3_put_file(config, credentials, "a b", path, "text/plain", http_execute = aws_test_http)
 	testing.expect(t, result.ok && state.calls == 3)
 }
 

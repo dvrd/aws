@@ -106,32 +106,20 @@ Credential_Test_HTTP :: struct {
 
 credential_test_http_state: ^Credential_Test_HTTP
 
-credential_test_http :: proc(
-	method, url: string,
-	body: []u8,
-	headers: []string,
-	ca_file: string,
-	allow_http: bool,
-	timeout_ms: i64,
-	upload_file: ^os.File,
-	upload_size: i64,
-) -> (
-	[]u8,
-	network_client.Buffered_HTTP_Result,
-) {
+credential_test_http :: proc(request: HTTP_Request) -> ([]u8, network_client.Buffered_HTTP_Result) {
 	state := credential_test_http_state
 	state.calls += 1
-	if !allow_http ||
-	   timeout_ms != 1500 ||
-	   upload_file != nil ||
-	   upload_size != 0 ||
-	   ca_file != "" ||
-	   len(body) != 0 ||
-	   !credential_metadata_url_permitted(url) {
-		state.rejected = url
+	if !request.allow_http ||
+	   request.timeout_ms != 1500 ||
+	   request.upload_file != nil ||
+	   request.upload_size != 0 ||
+	   request.ca_file != "" ||
+	   len(request.body) != 0 ||
+	   !credential_metadata_url_permitted(request.url) {
+		state.rejected = request.url
 		return nil, {ok = false, status = 400}
 	}
-	_ = headers
+	_ = request.headers
 	if state.block {
 		sync.mutex_lock(&state.mutex)
 		state.entered += 1
@@ -147,20 +135,20 @@ credential_test_http :: proc(
 		return nil, {ok = false, status = 503}
 	}
 	if state.ec2 {
-		if method == "PUT" && url == "http://169.254.169.254/latest/api/token" {
+		if request.method == "PUT" && request.url == "http://169.254.169.254/latest/api/token" {
 			return transmute([]u8)string("imds-token"), {ok = true, status = 200}
 		}
 
-		if method == "GET" && url == "http://169.254.169.254/latest/meta-data/iam/security-credentials/" {
+		if request.method == "GET" && request.url == "http://169.254.169.254/latest/meta-data/iam/security-credentials/" {
 			return transmute([]u8)string("fixture-role\n"), {ok = true, status = 200}
 		}
 
-		if method != "GET" || url != "http://169.254.169.254/latest/meta-data/iam/security-credentials/fixture-role" {
-			state.rejected = url
+		if request.method != "GET" || request.url != "http://169.254.169.254/latest/meta-data/iam/security-credentials/fixture-role" {
+			state.rejected = request.url
 			return nil, {ok = false}
 		}
-	} else if method != "GET" || url != "http://169.254.170.2/v2/credentials/fixture" {
-		state.rejected = url
+	} else if request.method != "GET" || request.url != "http://169.254.170.2/v2/credentials/fixture" {
+		state.rejected = request.url
 		return nil, {ok = false}
 	}
 	payload := state.body

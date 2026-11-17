@@ -12,7 +12,7 @@ import "core:time"
 // Uncached resolution. Strings borrow context.temp_allocator. No expiry and no cache:
 // a later call observes environment changes. Incomplete configured material fails closed.
 aws_credentials :: proc() -> (credentials: AWS_Credentials, ok: bool) {
-	return aws_credentials_with_http(network_client.buffered_http_execute)
+	return aws_credentials_with_http(http_execute_default)
 }
 
 aws_credentials_with_http :: proc(http_execute: HTTP_Execute) -> (credentials: AWS_Credentials, ok: bool) {
@@ -64,15 +64,13 @@ aws_credentials_with_http :: proc(http_execute: HTTP_Execute) -> (credentials: A
 			return
 		}
 		reply, result := http_execute(
-			"PUT",
-			"http://169.254.169.254/latest/api/token",
-			nil,
-			{"X-aws-ec2-metadata-token-ttl-seconds: 60"},
-			"",
-			true,
-			1500,
-			nil,
-			0,
+			{
+				method = "PUT",
+				url = "http://169.254.169.254/latest/api/token",
+				headers = {"X-aws-ec2-metadata-token-ttl-seconds: 60"},
+				allow_http = true,
+				timeout_ms = 1500,
+			},
 		)
 		if !result.ok {
 			return
@@ -82,15 +80,13 @@ aws_credentials_with_http :: proc(http_execute: HTTP_Execute) -> (credentials: A
 			return
 		}
 		role, role_result := http_execute(
-			"GET",
-			"http://169.254.169.254/latest/meta-data/iam/security-credentials/",
-			nil,
-			{fmt.tprintf("X-aws-ec2-metadata-token: %s", token)},
-			"",
-			true,
-			1500,
-			nil,
-			0,
+			{
+				method = "GET",
+				url = "http://169.254.169.254/latest/meta-data/iam/security-credentials/",
+				headers = {fmt.tprintf("X-aws-ec2-metadata-token: %s", token)},
+				allow_http = true,
+				timeout_ms = 1500,
+			},
 		)
 		role_name := strings.trim_space(string(role))
 
@@ -105,7 +101,7 @@ aws_credentials_with_http :: proc(http_execute: HTTP_Execute) -> (credentials: A
 	if token != "" {
 		headers = {fmt.tprintf("X-aws-ec2-metadata-token: %s", token)}
 	}
-	data, result := http_execute("GET", url, nil, headers, "", true, 1500, nil, 0)
+	data, result := http_execute({method = "GET", url = url, headers = headers, allow_http = true, timeout_ms = 1500})
 	if !result.ok {
 		return
 	}
@@ -483,7 +479,6 @@ credential_lease_release :: proc(cache: ^Credential_Cache, lease: ^Credential_Le
 	}
 }
 
-@(private)
 credential_cancelled :: proc(cancel: ^Credential_Cancel) -> bool {
 	if cancel == nil {
 		return false
@@ -492,7 +487,6 @@ credential_cancelled :: proc(cancel: ^Credential_Cancel) -> bool {
 	return sync.atomic_load(&cancel.cancelled) != 0
 }
 
-@(private)
 credential_snapshot_usable :: proc(snap: ^Credential_Snapshot, now: time.Time) -> bool {
 	if snap == nil || snap.retired {
 		return false
@@ -505,7 +499,6 @@ credential_snapshot_usable :: proc(snap: ^Credential_Snapshot, now: time.Time) -
 	return time.diff(now, snap.expires) > 0
 }
 
-@(private)
 credential_snapshot_borrow :: proc(snap: ^Credential_Snapshot) -> Credential_Lease {
 	snap.readers += 1
 
@@ -520,7 +513,6 @@ credential_snapshot_borrow :: proc(snap: ^Credential_Snapshot) -> Credential_Lea
 	}
 }
 
-@(private)
 credential_snapshot_retire :: proc(cache: ^Credential_Cache, snap: ^Credential_Snapshot) {
 	if snap == nil {
 		return
@@ -533,7 +525,6 @@ credential_snapshot_retire :: proc(cache: ^Credential_Cache, snap: ^Credential_S
 	}
 }
 
-@(private)
 credential_snapshot_erase :: proc(cache: ^Credential_Cache, snap: ^Credential_Snapshot) {
 	if snap == nil {
 		return
@@ -557,7 +548,6 @@ credential_snapshot_erase :: proc(cache: ^Credential_Cache, snap: ^Credential_Sn
 	free(snap, allocator)
 }
 
-@(private)
 credential_snapshot_new :: proc(
 	allocator: mem.Allocator,
 	source: Credential_Source,
@@ -594,7 +584,6 @@ credential_snapshot_new :: proc(
 	return snap, {}
 }
 
-@(private)
 credential_resolve :: proc(cache: ^Credential_Cache) -> (snap: ^Credential_Snapshot, error: Credential_Error) {
 	if .Environment in cache.modes {
 		access := credential_env("AWS_ACCESS_KEY_ID")
@@ -691,7 +680,6 @@ credential_resolve :: proc(cache: ^Credential_Cache) -> (snap: ^Credential_Snaps
 	return nil, {kind = .Unavailable}
 }
 
-@(private)
 credential_fetch_ec2 :: proc(cache: ^Credential_Cache) -> (snap: ^Credential_Snapshot, error: Credential_Error) {
 	reply, ok := credential_metadata_call(
 		cache.execute,
@@ -728,7 +716,6 @@ credential_fetch_ec2 :: proc(cache: ^Credential_Cache) -> (snap: ^Credential_Sna
 	)
 }
 
-@(private)
 credential_fetch_document :: proc(
 	cache: ^Credential_Cache,
 	source: Credential_Source,
@@ -786,13 +773,12 @@ credential_fetch_document :: proc(
 	)
 }
 
-@(private)
 credential_metadata_call :: proc(execute: HTTP_Execute, method, url: string, headers: []string) -> ([]byte, bool) {
 	if execute == nil || !credential_metadata_url_permitted(url) {
 		return nil, false
 	}
 
-	reply, result := execute(method, url, nil, headers, "", true, 1500, nil, 0)
+	reply, result := execute({method = method, url = url, headers = headers, allow_http = true, timeout_ms = 1500})
 
 	if !result.ok {
 		return nil, false
@@ -802,7 +788,6 @@ credential_metadata_call :: proc(execute: HTTP_Execute, method, url: string, hea
 }
 
 // Fixed link-local metadata only. Full credential URIs and any other host are rejected.
-@(private)
 credential_metadata_url_permitted :: proc(url: string) -> bool {
 	if strings.contains_any(url, "\r\n\\@ ") || !strings.contains(url, "://") {
 		return false
@@ -829,7 +814,6 @@ credential_metadata_url_permitted :: proc(url: string) -> bool {
 	return false
 }
 
-@(private)
 credential_relative_uri_ok :: proc(relative: string) -> bool {
 	if relative == "" || len(relative) > CREDENTIAL_RELATIVE_MAX {
 		return false
@@ -846,7 +830,6 @@ credential_relative_uri_ok :: proc(relative: string) -> bool {
 	return true
 }
 
-@(private)
 credential_bounded_valid :: proc(value: AWS_Credentials) -> bool {
 	return(
 		len(value.access_key) <= CREDENTIAL_ACCESS_MAX &&
@@ -856,12 +839,10 @@ credential_bounded_valid :: proc(value: AWS_Credentials) -> bool {
 	)
 }
 
-@(private)
 credential_env :: proc(key: string) -> string {
 	return os.get_env(key, context.temp_allocator)
 }
 
-@(private)
 credential_wipe_text :: proc(value: string) {
 	if len(value) == 0 {
 		return
@@ -870,7 +851,6 @@ credential_wipe_text :: proc(value: string) {
 	mem.zero_explicit(raw_data(value), len(value))
 }
 
-@(private)
 credential_profile_load :: proc(
 	path, profile: string,
 	strict: bool,
@@ -944,16 +924,31 @@ credential_profile_load :: proc(
 
 // Optional per-operation seam for isolated providers and offline tests. Defaults
 // use Surf; implementations must preserve its bounded response/trust contract.
-HTTP_Execute :: proc(
+HTTP_Execute :: proc(request: HTTP_Request) -> ([]u8, network_client.Buffered_HTTP_Result)
+
+// One buffered request. Optional upload_file streams upload_size bytes instead of body.
+HTTP_Request :: struct {
 	method, url: string,
-	body: []u8,
-	headers: []string,
-	ca_file: string,
-	allow_http: bool,
-	timeout_ms: i64,
+	body:        []u8,
+	headers:     []string,
+	ca_file:     string,
+	allow_http:  bool,
+	timeout_ms:  i64,
 	upload_file: ^os.File,
 	upload_size: i64,
-) -> (
-	[]u8,
-	network_client.Buffered_HTTP_Result,
-)
+}
+
+// Default HTTP_Execute: Surf's buffered client.
+http_execute_default :: proc(request: HTTP_Request) -> ([]u8, network_client.Buffered_HTTP_Result) {
+	return network_client.buffered_http_execute(
+		request.method,
+		request.url,
+		request.body,
+		request.headers,
+		request.ca_file,
+		request.allow_http,
+		request.timeout_ms,
+		request.upload_file,
+		request.upload_size,
+	)
+}

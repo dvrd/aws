@@ -208,7 +208,7 @@ probe_live :: proc(scope: Scope, action: Action, run_id: string) -> Result {
 	cache: aws.Credential_Cache
 	initialized := aws.credential_cache_init(
 		&cache,
-		surf.buffered_http_execute,
+		aws.http_execute_default,
 		credential_clock,
 		modes = {.Environment},
 	)

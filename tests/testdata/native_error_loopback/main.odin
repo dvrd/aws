@@ -44,7 +44,7 @@ main :: proc() {
 	// Public signed APIs and their unchanged DEFAULT native Surf executor.
 	switch os.args[3] {
 	case "PUT":
-		result = aws.s3_put_at(
+		result = aws.s3_put(
 			config,
 			credentials,
 			"qualification/owned.txt",
@@ -53,7 +53,7 @@ main :: proc() {
 			time.now(),
 		)
 	case "DELETE":
-		result = aws.s3_delete_at(config, credentials, "qualification/owned.txt", time.now())
+		result = aws.s3_delete(config, credentials, "qualification/owned.txt", time.now())
 	case:
 		os.exit(2)
 	}

@@ -1,6 +1,5 @@
 package aws
 
-import network_client "../surf"
 import "core:encoding/json"
 import "core:fmt"
 import "core:strings"
@@ -66,7 +65,7 @@ ses_send :: proc(
 	credentials: AWS_Credentials,
 	subject, text: string,
 	now: time.Time,
-	http_execute: HTTP_Execute = network_client.buffered_http_execute,
+	http_execute: HTTP_Execute = http_execute_default,
 ) -> SES_Error {
 	if http_execute == nil || !ses_config_valid(config) || !aws_credentials_valid(credentials) {
 		return .Invalid_Config
@@ -91,15 +90,7 @@ ses_send :: proc(
 	path := "/v2/email/outbound-emails"
 	headers := ses_headers(config.region, credentials, host, s3_timestamp(now), payload)
 	data, result := http_execute(
-		"POST",
-		fmt.tprintf("https://%s%s", host, path),
-		payload,
-		headers,
-		"",
-		false,
-		15000,
-		nil,
-		0,
+		{method = "POST", url = fmt.tprintf("https://%s%s", host, path), body = payload, headers = headers, timeout_ms = 15000},
 	)
 	if result.status != 0 && result.status != 200 {
 		return .Rejected

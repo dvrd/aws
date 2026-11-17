@@ -69,32 +69,38 @@ s3_config_error :: proc(config: S3_Config) -> string {
 	return ""
 }
 
-@(private)
+signing_time :: proc(now: time.Time) -> time.Time {
+	if now == (time.Time{}) {
+		return time.now()
+	}
+
+	return now
+}
+
 region_char_valid :: proc(ch: rune) -> bool {
 	return is_lower(ch) || is_digit(ch) || ch == '-'
 }
 
+// now is the signing time; the zero time means time.now().
 s3_put :: proc(
 	config: S3_Config,
 	credentials: AWS_Credentials,
 	key: string,
 	body: []byte,
 	content_type: string,
-	http_execute: HTTP_Execute = network_client.buffered_http_execute,
+	now: time.Time = {},
+	http_execute: HTTP_Execute = http_execute_default,
 ) -> S3_Result {
-	return s3_put_at(config, credentials, key, body, content_type, time.now(), http_execute)
-}
-
-s3_put_at :: proc(
-	config: S3_Config,
-	credentials: AWS_Credentials,
-	key: string,
-	body: []byte,
-	content_type: string,
-	now: time.Time,
-	http_execute: HTTP_Execute = network_client.buffered_http_execute,
-) -> S3_Result {
-	return s3_object_request_at(config, credentials, "PUT", key, body, content_type, now, http_execute = http_execute)
+	return s3_object_request_at(
+		config,
+		credentials,
+		"PUT",
+		key,
+		body,
+		content_type,
+		signing_time(now),
+		http_execute = http_execute,
+	)
 }
 
 // Stream a file with a fixed buffer, avoiding an archive-sized allocation.
@@ -102,29 +108,8 @@ s3_put_file :: proc(
 	config: S3_Config,
 	credentials: AWS_Credentials,
 	key, path, content_type: string,
-	http_execute: HTTP_Execute = network_client.buffered_http_execute,
-) -> S3_Result {
-	return s3_put_file_internal(config, credentials, key, path, content_type, {}, false, http_execute)
-}
-
-s3_put_file_at :: proc(
-	config: S3_Config,
-	credentials: AWS_Credentials,
-	key, path, content_type: string,
-	now: time.Time,
-	http_execute: HTTP_Execute = network_client.buffered_http_execute,
-) -> S3_Result {
-	return s3_put_file_internal(config, credentials, key, path, content_type, now, true, http_execute)
-}
-
-@(private)
-s3_put_file_internal :: proc(
-	config: S3_Config,
-	credentials: AWS_Credentials,
-	key, path, content_type: string,
-	now: time.Time,
-	exact_time: bool,
-	http_execute: HTTP_Execute = network_client.buffered_http_execute,
+	now: time.Time = {},
+	http_execute: HTTP_Execute = http_execute_default,
 ) -> S3_Result {
 	file, error := os.open(path)
 	if error != nil {
@@ -153,10 +138,6 @@ s3_put_file_internal :: proc(
 	if _, seek_error := os.seek(file, 0, .Start); seek_error != nil {
 		return {}
 	}
-	instant := now
-	if !exact_time {
-		instant = time.now()
-	}
 	return s3_object_request_at(
 		config,
 		credentials,
@@ -164,7 +145,7 @@ s3_put_file_internal :: proc(
 		key,
 		nil,
 		content_type,
-		instant,
+		signing_time(now),
 		file,
 		size,
 		string(hex.encode(digest[:], allocator = context.temp_allocator)),
@@ -176,22 +157,12 @@ s3_delete :: proc(
 	config: S3_Config,
 	credentials: AWS_Credentials,
 	key: string,
-	http_execute: HTTP_Execute = network_client.buffered_http_execute,
+	now: time.Time = {},
+	http_execute: HTTP_Execute = http_execute_default,
 ) -> S3_Result {
-	return s3_delete_at(config, credentials, key, time.now(), http_execute)
+	return s3_object_request_at(config, credentials, "DELETE", key, nil, "", signing_time(now), http_execute = http_execute)
 }
 
-s3_delete_at :: proc(
-	config: S3_Config,
-	credentials: AWS_Credentials,
-	key: string,
-	now: time.Time,
-	http_execute: HTTP_Execute = network_client.buffered_http_execute,
-) -> S3_Result {
-	return s3_object_request_at(config, credentials, "DELETE", key, nil, "", now, http_execute = http_execute)
-}
-
-@(private)
 s3_object_request_at :: proc(
 	config: S3_Config,
 	credentials: AWS_Credentials,
@@ -202,7 +173,7 @@ s3_object_request_at :: proc(
 	file: ^os.File = nil,
 	file_size: i64 = 0,
 	file_digest: string = "",
-	http_execute: HTTP_Execute = network_client.buffered_http_execute,
+	http_execute: HTTP_Execute = http_execute_default,
 ) -> S3_Result {
 	if http_execute == nil ||
 	   !aws_credentials_valid(credentials) ||
@@ -217,15 +188,16 @@ s3_object_request_at :: proc(
 	digest := file_digest if file != nil else s3_sha256(body)
 	headers := s3_object_headers(config, credentials, method, host, path, digest, stamp, content_type)
 	_, result := http_execute(
-		method,
-		fmt.tprintf("%s%s", origin, path),
-		body,
-		headers,
-		config.ca_file,
-		false,
-		120000 if file != nil else 15000,
-		file,
-		file_size,
+		{
+			method = method,
+			url = fmt.tprintf("%s%s", origin, path),
+			body = body,
+			headers = headers,
+			ca_file = config.ca_file,
+			timeout_ms = 120000 if file != nil else 15000,
+			upload_file = file,
+			upload_size = file_size,
+		},
 	)
 	return result
 }
@@ -274,24 +246,6 @@ s3_download_url :: proc(
 	url: string,
 	ok: bool,
 ) {
-	instant := now
-	if instant == (time.Time{}) {
-		instant = time.now()
-	}
-	return s3_download_url_at(config, credentials, key, expires_seconds, instant)
-}
-
-// Exact time, including time.Time{}; unlike the legacy wrapper zero is not now.
-s3_download_url_at :: proc(
-	config: S3_Config,
-	credentials: AWS_Credentials,
-	key: string,
-	expires_seconds: int,
-	now: time.Time,
-) -> (
-	url: string,
-	ok: bool,
-) {
 	if !aws_credentials_valid(credentials) ||
 	   s3_config_error(config) != "" ||
 	   config.bucket == "" ||
@@ -301,7 +255,7 @@ s3_download_url_at :: proc(
 		return
 	}
 	origin, host, path := s3_location(config, key)
-	stamp := s3_timestamp(now)
+	stamp := s3_timestamp(signing_time(now))
 	scope := fmt.tprintf("%s/%s/s3/aws4_request", stamp[:8], config.region)
 	query := fmt.tprintf(
 		"X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=%s&X-Amz-Date=%s&X-Amz-Expires=%d",
@@ -392,7 +346,6 @@ S3_GET_BYTES_MAX :: 64 * 1024 * 1024 // Surf's response body ceiling
 S3_GET_TIMEOUT_MS :: 120000
 S3_GET_HEADERS_MAX :: 8
 
-@(private)
 s3_get_native_config :: proc(timeout_ms: i64, bytes_max: int, roots: []^x509.Certificate) -> network_client.Config {
 	return {
 		max_body_size = max(bytes_max, 1),
@@ -432,21 +385,7 @@ s3_get :: proc(
 	credentials: AWS_Credentials,
 	key: string,
 	bytes_max: int,
-	allocator := context.allocator,
-	execute: S3_Get_Execute = s3_get_native,
-) -> (
-	[]u8,
-	S3_Get_Error,
-) {
-	return s3_get_at(config, credentials, key, bytes_max, time.now(), allocator, execute)
-}
-
-s3_get_at :: proc(
-	config: S3_Config,
-	credentials: AWS_Credentials,
-	key: string,
-	bytes_max: int,
-	now: time.Time,
+	now: time.Time = {},
 	allocator := context.allocator,
 	execute: S3_Get_Execute = s3_get_native,
 ) -> (
@@ -463,7 +402,7 @@ s3_get_at :: proc(
 		return nil, .Invalid_Input
 	}
 	origin, host, path := s3_location(config, key)
-	stamp := s3_timestamp(now)
+	stamp := s3_timestamp(signing_time(now))
 	headers := s3_object_headers(config, credentials, "GET", host, path, s3_sha256(nil), stamp, "")
 	url := fmt.tprintf("%s%s", origin, path)
 	body, status, error := execute(url, headers, S3_GET_TIMEOUT_MS, bytes_max, allocator)
@@ -561,5 +500,4 @@ s3_get_native :: proc(
 }
 
 // Surf's request header type, named through its API so aws needs no http import.
-@(private = "file")
 S3_Header :: type_of(network_client.Response{}.headers[0])

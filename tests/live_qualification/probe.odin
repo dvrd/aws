@@ -4,7 +4,6 @@ import aws "shared:aws"
 import surf "shared:surf"
 import "core:crypto/sha2"
 import "core:fmt"
-import "core:os"
 import "core:strings"
 import "core:time"
 
@@ -22,52 +21,34 @@ SES_Capture :: struct {
 	called:  bool,
 }
 
-ses_capture :: proc(
-	method, url: string,
-	body: []u8,
-	headers: []string,
-	ca_file: string,
-	allow_http: bool,
-	timeout_ms: i64,
-	upload_file: ^os.File,
-	upload_size: i64,
-) -> (
-	[]u8,
-	surf.Buffered_HTTP_Result,
-) {
+ses_capture :: proc(request: aws.HTTP_Request) -> ([]u8, surf.Buffered_HTTP_Result) {
 	capture := cast(^SES_Capture)context.user_ptr
 	endpoint := fmt.aprintf("https://email.%s.amazonaws.com/v2/email/outbound-emails", capture.region)
 	defer delete(endpoint)
 	if capture.called ||
-	   method != "POST" ||
-	   url != endpoint ||
-	   ca_file != "" ||
-	   allow_http ||
-	   upload_file != nil ||
-	   upload_size != 0 ||
-	   len(body) > 4096 {
+	   request.method != "POST" ||
+	   request.url != endpoint ||
+	   request.ca_file != "" ||
+	   request.allow_http ||
+	   request.upload_file != nil ||
+	   request.upload_size != 0 ||
+	   len(request.body) > 4096 {
 		return nil, {error = {kind = .Invalid_Config, write_effect = .Not_Sent}}
 	}
 	capture.called = true
+	forward := request
+	forward.timeout_ms = min(request.timeout_ms, 15000)
 	data: []u8
+
 	if capture.execute == nil {
-		data, capture.result = surf.buffered_http_execute(
-			method,
-			url,
-			body,
-			headers,
-			"",
-			false,
-			min(timeout_ms, 15000),
-			nil,
-			0,
-		)
+		data, capture.result = aws.http_execute_default(forward)
 	} else {
 		previous := context.user_ptr
 		context.user_ptr = capture.data
 		defer context.user_ptr = previous
-		data, capture.result = capture.execute(method, url, body, headers, "", false, min(timeout_ms, 15000), nil, 0)
+		data, capture.result = capture.execute(forward)
 	}
+
 	return data, capture.result
 }
 
@@ -195,7 +176,7 @@ object_put :: proc(
 	if executors.write == nil {
 		outcome = aws.s3_put(config, credentials, key, transmute([]u8)expected, "text/plain")
 	} else {
-		outcome = aws.s3_put(config, credentials, key, transmute([]u8)expected, "text/plain", executors.write)
+		outcome = aws.s3_put(config, credentials, key, transmute([]u8)expected, "text/plain", http_execute = executors.write)
 	}
 	effect := effect_of(outcome)
 	if !outcome.ok || outcome.status < 200 || outcome.status > 299 {
@@ -237,7 +218,7 @@ object_delete :: proc(
 	if executors.write == nil {
 		outcome = aws.s3_delete(config, credentials, key)
 	} else {
-		outcome = aws.s3_delete(config, credentials, key, executors.write)
+		outcome = aws.s3_delete(config, credentials, key, http_execute = executors.write)
 	}
 	effect := effect_of(outcome)
 	if !outcome.ok || outcome.status < 200 || outcome.status > 299 {

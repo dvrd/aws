@@ -83,7 +83,7 @@ s3_get_promotes_signed_bounded_owned_reads :: proc(t: ^testing.T) {
 		"fixture/token+value",
 	}
 
-	body, e := s3_get_at(
+	body, e := s3_get(
 		config,
 		credentials,
 		"a b/c+d",
@@ -138,7 +138,7 @@ s3_get_maps_status_and_releases_every_failed_body :: proc(t: ^testing.T) {
 
 	for item in cases {
 		fixture.status = item.status
-		body, e := s3_get_at(
+		body, e := s3_get(
 			config,
 			credentials,
 			"a b/c+d",
@@ -153,7 +153,7 @@ s3_get_maps_status_and_releases_every_failed_body :: proc(t: ^testing.T) {
 
 	fixture.status = 200
 	fixture.body_size = 9
-	body, e := s3_get_at(
+	body, e := s3_get(
 		config,
 		credentials,
 		"a b/c+d",
@@ -165,7 +165,7 @@ s3_get_maps_status_and_releases_every_failed_body :: proc(t: ^testing.T) {
 	testing.expect(t, body == nil && e == .Too_Large)
 	fixture.body_size = 7
 	fixture.error = .Unavailable
-	body, e = s3_get_at(
+	body, e = s3_get(
 		config,
 		credentials,
 		"a b/c+d",
@@ -178,13 +178,13 @@ s3_get_maps_status_and_releases_every_failed_body :: proc(t: ^testing.T) {
 	calls := fixture.calls
 
 	for bound in ([]int{-1, S3_GET_BYTES_MAX + 1}) {
-		body, e = s3_get(config, credentials, "a b/c+d", bound, context.allocator, s3_get_fixture_execute)
+		body, e = s3_get(config, credentials, "a b/c+d", bound, execute = s3_get_fixture_execute)
 		testing.expect(t, body == nil && e == .Invalid_Input)
 	}
 
-	_, e = s3_get(config, {}, "key", 8, context.allocator, s3_get_fixture_execute)
+	_, e = s3_get(config, {}, "key", 8, execute = s3_get_fixture_execute)
 	testing.expect_value(t, e, .Invalid_Input)
-	_, e = s3_get(config, credentials, "", 8, context.allocator, s3_get_fixture_execute)
+	_, e = s3_get(config, credentials, "", 8, execute = s3_get_fixture_execute)
 	testing.expect_value(t, e, .Invalid_Input)
 	testing.expect_value(t, fixture.calls, calls)
 }

@@ -119,7 +119,7 @@ run :: proc(args: []string) -> Result {
 	context.user_ptr = &capture
 	defer context.user_ptr = previous
 	// Public synthetic values only. Ambient environment/profile keys are never read.
-	body, error := aws.s3_get_at(
+	body, error := aws.s3_get(
 		{bucket = args[2], region = args[4]},
 		{access_key = "invalid-synthetic-access", secret_key = "public-fixture-not-a-secret"},
 		args[6],

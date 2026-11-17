@@ -3,7 +3,6 @@ package main
 import aws "shared:aws"
 import surf "shared:surf"
 import "core:mem"
-import "core:os"
 import "core:strings"
 import "core:testing"
 
@@ -63,33 +62,21 @@ fixture_get :: proc(
 	return body, 200, .None
 }
 
-fixture_write :: proc(
-	method, url: string,
-	body: []u8,
-	headers: []string,
-	ca_file: string,
-	allow_http: bool,
-	timeout_ms: i64,
-	upload_file: ^os.File,
-	upload_size: i64,
-) -> (
-	[]u8,
-	surf.Buffered_HTTP_Result,
-) {
+fixture_write :: proc(request: aws.HTTP_Request) -> ([]u8, surf.Buffered_HTTP_Result) {
 	fixture := cast(^Fixture)context.user_ptr
-	testing.expect(fixture.t, ca_file == "" && !allow_http && timeout_ms <= 15000)
-	testing.expect(fixture.t, upload_file == nil && upload_size == 0)
+	testing.expect(fixture.t, request.ca_file == "" && !request.allow_http && request.timeout_ms <= 15000)
+	testing.expect(fixture.t, request.upload_file == nil && request.upload_size == 0)
 	signed := false
-	for header in headers {
+	for header in request.headers {
 		if strings.has_prefix(header, "Authorization: AWS4-HMAC-SHA256 ") {
 			signed = true
 		}
 	}
 	testing.expect(fixture.t, signed)
-	if method == "POST" {
+	if request.method == "POST" {
 		fixture.sends += 1
-		testing.expect_value(fixture.t, url, "https://email.us-east-1.amazonaws.com/v2/email/outbound-emails")
-		testing.expect(fixture.t, strings.contains(string(body), `"ToAddresses":["success@simulator.amazonses.com"]`))
+		testing.expect_value(fixture.t, request.url, "https://email.us-east-1.amazonaws.com/v2/email/outbound-emails")
+		testing.expect(fixture.t, strings.contains(string(request.body), `"ToAddresses":["success@simulator.amazonses.com"]`))
 
 		if fixture.ses_unknown {
 			return nil, {error = {kind = .IO_Failed, write_effect = .Unknown}}
@@ -99,14 +86,14 @@ fixture_write :: proc(
 	}
 	testing.expect(
 		fixture.t,
-		strings.has_prefix(url, "https://webtools-qualification-fixture.s3.us-east-1.amazonaws.com/qualification/"),
+		strings.has_prefix(request.url, "https://webtools-qualification-fixture.s3.us-east-1.amazonaws.com/qualification/"),
 	)
-	if method == "PUT" {
+	if request.method == "PUT" {
 		fixture.puts += 1
 		fixture.object = .Owned
 		expected := strings.concatenate({PAYLOAD_PREFIX, TEST_RUN})
 		defer delete(expected)
-		testing.expect_value(fixture.t, string(body), expected)
+		testing.expect_value(fixture.t, string(request.body), expected)
 
 		if fixture.put_unknown {
 			return nil, {error = {kind = .IO_Failed, write_effect = .Unknown}}
@@ -114,7 +101,7 @@ fixture_write :: proc(
 
 		return nil, {ok = true, status = 200}
 	}
-	testing.expect_value(fixture.t, method, "DELETE")
+	testing.expect_value(fixture.t, request.method, "DELETE")
 	fixture.deletes += 1
 	if !fixture.delete_mismatch {
 		fixture.object = .Absent

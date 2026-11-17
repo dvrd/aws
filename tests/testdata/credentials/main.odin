@@ -3,51 +3,38 @@ package main
 import "core:fmt"
 import "core:mem"
 import "core:os"
-import "core:strings"
 import aws "shared:aws"
 import surf "shared:surf"
 
 mode: string
 calls: int
-metadata :: proc(
-	method, url: string,
-	body: []u8,
-	headers: []string,
-	ca_file: string,
-	allow_http: bool,
-	timeout_ms: i64,
-	upload_file: ^os.File,
-	upload_size: i64,
-) -> (
-	[]u8,
-	surf.Buffered_HTTP_Result,
-) {
+metadata :: proc(request: aws.HTTP_Request) -> ([]u8, surf.Buffered_HTTP_Result) {
 	assert(
-		allow_http && timeout_ms == 1500 && ca_file == "" && len(body) == 0 && upload_file == nil && upload_size == 0,
+		request.allow_http && request.timeout_ms == 1500 && request.ca_file == "" && len(request.body) == 0 && request.upload_file == nil && request.upload_size == 0,
 	)
 	step := calls
 	calls += 1
 	if mode == "imds" {
 		switch step {
 		case 0:
-			assert(method == "PUT" && url == "http://169.254.169.254/latest/api/token")
-			assert(len(headers) == 1 && headers[0] == "X-aws-ec2-metadata-token-ttl-seconds: 60")
+			assert(request.method == "PUT" && request.url == "http://169.254.169.254/latest/api/token")
+			assert(len(request.headers) == 1 && request.headers[0] == "X-aws-ec2-metadata-token-ttl-seconds: 60")
 			return transmute([]u8)string("fixture-token"), {status = 200, ok = true, transport_ok = true}
 		case 1:
-			assert(method == "GET" && url == "http://169.254.169.254/latest/meta-data/iam/security-credentials/")
-			assert(len(headers) == 1 && headers[0] == "X-aws-ec2-metadata-token: fixture-token")
+			assert(request.method == "GET" && request.url == "http://169.254.169.254/latest/meta-data/iam/security-credentials/")
+			assert(len(request.headers) == 1 && request.headers[0] == "X-aws-ec2-metadata-token: fixture-token")
 			return transmute([]u8)string("fixture-role\n"), {status = 200, ok = true, transport_ok = true}
 		case 2:
 			assert(
-				method == "GET" &&
-				url == "http://169.254.169.254/latest/meta-data/iam/security-credentials/fixture-role",
+				request.method == "GET" &&
+				request.url == "http://169.254.169.254/latest/meta-data/iam/security-credentials/fixture-role",
 			)
-			assert(len(headers) == 1 && headers[0] == "X-aws-ec2-metadata-token: fixture-token")
+			assert(len(request.headers) == 1 && request.headers[0] == "X-aws-ec2-metadata-token: fixture-token")
 		case:
 			panic("unexpected metadata request")
 		}
 	} else {
-		assert(method == "GET" && url == "http://169.254.170.2/v2/credentials/fixture" && len(headers) == 0)
+		assert(request.method == "GET" && request.url == "http://169.254.170.2/v2/credentials/fixture" && len(request.headers) == 0)
 	}
 	if mode == "transport-failure" {
 		return nil, {status = 503, error = {kind = .IO_Failed, phase = .Read, write_effect = .Unknown}}

@@ -27,7 +27,7 @@ main :: proc() {
 
 	// This intentionally uses the public SIGNED operation and its DEFAULT native
 	// executor, not an injected HTTP callback. The owned peer closes during TLS.
-	body, error := aws.s3_get_at(
+	body, error := aws.s3_get(
 		config,
 		{access_key = "fixture-access", secret_key = "fixture-secret"},
 		"qualification/fixture.txt",

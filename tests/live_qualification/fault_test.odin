@@ -4,7 +4,6 @@ import aws "shared:aws"
 import surf "shared:surf"
 import "core:encoding/json"
 import "core:mem"
-import "core:os"
 import "core:strings"
 import "core:testing"
 
@@ -51,23 +50,11 @@ aws_fault_get :: proc(
 	copy(body, transmute([]u8)owned)
 	return body, 200, .None
 }
-aws_fault_write :: proc(
-	method, _: string,
-	_: []u8,
-	_: []string,
-	_: string,
-	allow_http: bool,
-	timeout_ms: i64,
-	_: ^os.File,
-	_: i64,
-) -> (
-	[]u8,
-	surf.Buffered_HTTP_Result,
-) {
+aws_fault_write :: proc(request: aws.HTTP_Request) -> ([]u8, surf.Buffered_HTTP_Result) {
 	fault := cast(^AWS_Qualification_Fault)context.user_ptr
 	fault.writes += 1
-	testing.expect(fault.t, !allow_http && timeout_ms <= 15000)
-	testing.expect(fault.t, method == "PUT" || method == "DELETE" || method == "POST")
+	testing.expect(fault.t, !request.allow_http && request.timeout_ms <= 15000)
+	testing.expect(fault.t, request.method == "PUT" || request.method == "DELETE" || request.method == "POST")
 	return nil, {status = fault.status}
 }
 aws_fault_probe :: proc(fault: ^AWS_Qualification_Fault, action: Action, scope := TEST_SCOPE) -> Result {

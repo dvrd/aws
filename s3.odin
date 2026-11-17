@@ -30,13 +30,17 @@ load_s3_config :: proc() -> S3_Config {
 		region = os.get_env("AWS_REGION", context.allocator),
 	}
 
-	if config.region == "" do config.region = os.get_env("AWS_DEFAULT_REGION", context.allocator)
+	if config.region == "" {
+		config.region = os.get_env("AWS_DEFAULT_REGION", context.allocator)
+	}
 
 	return config
 }
 
 s3_config_error :: proc(config: S3_Config) -> string {
-	if config.bucket == "" do return ""
+	if config.bucket == "" {
+		return ""
+	}
 
 	if len(config.bucket) < 3 || len(config.bucket) > 63 || config.region == "" {
 		return "S3 requires AWS_S3_BUCKET and AWS_REGION"
@@ -123,22 +127,32 @@ s3_put_file_internal :: proc(
 	http_execute: HTTP_Execute = network_client.buffered_http_execute,
 ) -> S3_Result {
 	file, error := os.open(path)
-	if error != nil do return {}
+	if error != nil {
+		return {}
+	}
 	defer os.close(file)
 	size, size_error := os.file_size(file)
-	if size_error != nil do return {}
+	if size_error != nil {
+		return {}
+	}
 	hasher: hash.Context
 	hash.init(&hasher, .SHA256)
 	buffer: [64 * 1024]byte
 	for {
 		n, read_error := os.read(file, buffer[:])
-		if read_error != nil && read_error != io.Error.EOF do return {}
-		if n == 0 do break
+		if read_error != nil && read_error != io.Error.EOF {
+			return {}
+		}
+		if n == 0 {
+			break
+		}
 		hash.update(&hasher, buffer[:n])
 	}
 	digest: [32]byte
 	hash.final(&hasher, digest[:])
-	if _, seek_error := os.seek(file, 0, .Start); seek_error != nil do return {}
+	if _, seek_error := os.seek(file, 0, .Start); seek_error != nil {
+		return {}
+	}
 	instant := now
 	if !exact_time {
 		instant = time.now()
@@ -225,7 +239,9 @@ s3_object_headers :: proc(
 	signed := "host;x-amz-content-sha256;x-amz-date"
 	headers := make([dynamic]string, 0, 8, context.temp_allocator)
 	append(&headers, fmt.tprintf("x-amz-content-sha256: %s", digest), fmt.tprintf("x-amz-date: %s", stamp), "Expect:")
-	if content_type != "" do append(&headers, fmt.tprintf("Content-Type: %s", content_type))
+	if content_type != "" {
+		append(&headers, fmt.tprintf("Content-Type: %s", content_type))
+	}
 	if credentials.session_token != "" {
 		canonical_headers = fmt.tprintf("%sx-amz-security-token:%s\n", canonical_headers, credentials.session_token)
 		signed = fmt.tprintf("%s;x-amz-security-token", signed)
@@ -308,13 +324,18 @@ s3_location :: proc(config: S3_Config, key: string) -> (origin, host, path: stri
 	path_style := config.path_style || strings.contains(config.bucket, ".")
 
 	if origin == "" {
-		if path_style do origin = fmt.tprintf("https://s3.%s.%s", config.region, suffix)
-		else do origin = fmt.tprintf("https://%s.s3.%s.%s", config.bucket, config.region, suffix)
+		if path_style {
+			origin = fmt.tprintf("https://s3.%s.%s", config.region, suffix)
+		} else {
+			origin = fmt.tprintf("https://%s.s3.%s.%s", config.bucket, config.region, suffix)
+		}
 	}
 
 	host = origin[8:]
 	path = fmt.tprintf("/%s", s3_encode(key, true))
-	if path_style do path = fmt.tprintf("/%s%s", config.bucket, path)
+	if path_style {
+		path = fmt.tprintf("/%s%s", config.bucket, path)
+	}
 
 	return
 }

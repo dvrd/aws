@@ -39,12 +39,12 @@ s3_config_error :: proc(config: S3_Config) -> string {
 		return "S3 requires AWS_S3_BUCKET and AWS_REGION"
 	}
 	for ch in config.bucket {
-		if !(ch >= 'a' && ch <= 'z') && !(ch >= '0' && ch <= '9') && ch != '-' && ch != '.' {
+		if !is_lower(ch) && !is_digit(ch) && ch != '-' && ch != '.' {
 			return "Invalid S3 bucket name"
 		}
 	}
 	for ch in config.region {
-		if !(ch >= 'a' && ch <= 'z') && !(ch >= '0' && ch <= '9') && ch != '-' {
+		if !region_char_valid(ch) {
 			return "Invalid AWS region"
 		}
 	}
@@ -56,6 +56,11 @@ s3_config_error :: proc(config: S3_Config) -> string {
 		}
 	}
 	return ""
+}
+
+@(private)
+region_char_valid :: proc(ch: rune) -> bool {
+	return is_lower(ch) || is_digit(ch) || ch == '-'
 }
 
 s3_put :: proc(
@@ -377,9 +382,7 @@ s3_location :: proc(config: S3_Config, key: string) -> (origin, host, path: stri
 s3_encode :: proc(text: string, keep_slashes := false) -> string {
 	builder := strings.builder_make(allocator = context.temp_allocator)
 	for ch in transmute([]byte)text {
-		if ch >= 'a' && ch <= 'z' ||
-		   ch >= 'A' && ch <= 'Z' ||
-		   ch >= '0' && ch <= '9' ||
+		if is_alphanumeric(ch) ||
 		   ch == '-' ||
 		   ch == '_' ||
 		   ch == '.' ||

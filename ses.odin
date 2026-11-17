@@ -19,7 +19,7 @@ SES_Message :: struct {
 ses_config_valid :: proc(config: SES_Config) -> bool {
 	if len(config.region) == 0 || len(config.region) > 32 {return false}
 	for ch in config.region {
-		if !(ch >= 'a' && ch <= 'z') && !(ch >= '0' && ch <= '9') && ch != '-' {return false}
+		if !region_char_valid(ch) {return false}
 	}
 	for address in ([]string{config.sender, config.recipient}) {
 		if len(address) < 3 || len(address) > 254 || !strings.contains(address, "@") ||

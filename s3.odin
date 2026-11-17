@@ -8,6 +8,7 @@ import "core:fmt"
 import "core:io"
 import "core:os"
 import "core:strings"
+import "core:sync"
 import "core:time"
 import x509 "core:crypto/x509"
 import "core:mem"
@@ -20,6 +21,27 @@ S3_Config :: struct {
 
 AWS_Credentials :: struct {
 	access_key, secret_key, session_token: string,
+}
+
+// Optional process-wide observer of S3 object requests (put, delete and get) for
+// application metrics. started is the tick taken before the request was sent; ok
+// is false when S3 gave no expected answer. A GET answered 404 is ok: a missing
+// object is a valid answer, not a provider failure. Requests rejected before
+// sending are not observed. It runs on the requesting thread and must not block.
+S3_Observer :: #type proc(started: time.Tick, ok: bool)
+
+s3_observer: S3_Observer
+
+// Installs the S3 observer; nil removes it. Install it before requests start.
+s3_observer_set :: proc(observer: S3_Observer) {
+	sync.atomic_store(&s3_observer, observer)
+}
+
+s3_observe :: proc(started: time.Tick, ok: bool) {
+	observer := sync.atomic_load(&s3_observer)
+	if observer != nil {
+		observer(started, ok)
+	}
 }
 
 S3_Result :: network_client.Buffered_HTTP_Result
@@ -187,6 +209,7 @@ s3_object_request_at :: proc(
 	stamp := s3_timestamp(now)
 	digest := file_digest if file != nil else s3_sha256(body)
 	headers := s3_object_headers(config, credentials, method, host, path, digest, stamp, content_type)
+	started := time.tick_now()
 	_, result := http_execute(
 		{
 			method = method,
@@ -199,6 +222,7 @@ s3_object_request_at :: proc(
 			upload_size = file_size,
 		},
 	)
+	s3_observe(started, result.ok)
 	return result
 }
 
@@ -405,7 +429,9 @@ s3_get :: proc(
 	stamp := s3_timestamp(signing_time(now))
 	headers := s3_object_headers(config, credentials, "GET", host, path, s3_sha256(nil), stamp, "")
 	url := fmt.tprintf("%s%s", origin, path)
+	started := time.tick_now()
 	body, status, error := execute(url, headers, S3_GET_TIMEOUT_MS, bytes_max, allocator)
+	s3_observe(started, error == .None && (status == 404 || (status >= 200 && status <= 299)))
 	if error == .None && (status < 200 || status > 299) {
 		switch {
 		case status == 404:

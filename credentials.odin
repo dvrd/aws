@@ -509,10 +509,7 @@ credential_snapshot_new :: proc(
 	snap: ^Credential_Snapshot,
 	error: Credential_Error,
 ) {
-	if len(access) > CREDENTIAL_ACCESS_MAX ||
-	   len(secret) > CREDENTIAL_SECRET_MAX ||
-	   len(token) > CREDENTIAL_TOKEN_MAX ||
-	   !aws_credentials_valid({access, secret, token}) {
+	if !credential_bounded_valid({access, secret, token}) {
 		return nil, {kind = .Unavailable, source = source}
 	}
 	storage, alloc_error := make([]byte, len(access) + len(secret) + len(token), allocator)
@@ -545,13 +542,6 @@ credential_resolve :: proc(
 	snap: ^Credential_Snapshot,
 	error: Credential_Error,
 ) {
-	access_buf: [CREDENTIAL_ACCESS_MAX]byte
-	secret_buf: [CREDENTIAL_SECRET_MAX]byte
-	token_buf: [CREDENTIAL_TOKEN_MAX]byte
-	defer mem.zero_explicit(&access_buf, size_of(access_buf))
-	defer mem.zero_explicit(&secret_buf, size_of(secret_buf))
-	defer mem.zero_explicit(&token_buf, size_of(token_buf))
-
 	if .Environment in cache.modes {
 		access := credential_env("AWS_ACCESS_KEY_ID")
 		secret := credential_env("AWS_SECRET_ACCESS_KEY")
@@ -560,23 +550,11 @@ credential_resolve :: proc(
 		defer credential_wipe_text(secret)
 		defer credential_wipe_text(token)
 		if access != "" || secret != "" || token != "" {
-			if !credential_store_bounded(&access_buf, &secret_buf, &token_buf, access, secret, token) ||
-			   !aws_credentials_valid({
-					   string(access_buf[:len(access)]),
-					   string(secret_buf[:len(secret)]),
-					   string(token_buf[:len(token)]),
-				   }) {
+			if !credential_bounded_valid({access, secret, token}) {
 				return nil, {kind = .Incomplete, source = .Environment}
 			}
-			return credential_snapshot_new(
-				cache.allocator,
-				.Environment,
-				string(access_buf[:len(access)]),
-				string(secret_buf[:len(secret)]),
-				string(token_buf[:len(token)]),
-				{},
-				false,
-			)
+			// The snapshot copies the triple before the deferred wipes run.
+			return credential_snapshot_new(cache.allocator, .Environment, access, secret, token, {}, false)
 		}
 	}
 	web_identity := credential_env("AWS_WEB_IDENTITY_TOKEN_FILE")
@@ -599,7 +577,7 @@ credential_resolve :: proc(
 			path = fmt.tprintf("%s/.aws/credentials", home)
 		}
 		loaded, unsupported, data, read_error := credential_profile_load(path, profile, true)
-		defer credential_wipe_bytes(data)
+		defer credential_wipe_text(string(data))
 		if read_error.kind != .None && read_error.kind != .Open_Failed {
 			return nil, {kind = .Unavailable, source = .Profile}
 		}
@@ -607,22 +585,15 @@ credential_resolve :: proc(
 			return nil, {kind = .Unsupported, source = .Profile, unsupported = unsupported}
 		}
 		if loaded.access_key != "" || loaded.secret_key != "" || loaded.session_token != "" {
-			if !credential_store_bounded(
-				&access_buf,
-				&secret_buf,
-				&token_buf,
-				loaded.access_key,
-				loaded.secret_key,
-				loaded.session_token,
-			) || !aws_credentials_valid(loaded) {
+			if !credential_bounded_valid(loaded) {
 				return nil, {kind = .Incomplete, source = .Profile}
 			}
 			return credential_snapshot_new(
 				cache.allocator,
 				.Profile,
-				string(access_buf[:len(loaded.access_key)]),
-				string(secret_buf[:len(loaded.secret_key)]),
-				string(token_buf[:len(loaded.session_token)]),
+				loaded.access_key,
+				loaded.secret_key,
+				loaded.session_token,
 				{},
 				false,
 			)
@@ -662,44 +633,37 @@ credential_fetch_ec2 :: proc(
 	snap: ^Credential_Snapshot,
 	error: Credential_Error,
 ) {
-	token_buf: [CREDENTIAL_IMDS_TOKEN_MAX]byte
-	defer mem.zero_explicit(&token_buf, size_of(token_buf))
 	reply, ok := credential_metadata_call(
 		cache.execute,
 		"PUT",
 		"http://169.254.169.254/latest/api/token",
 		{"X-aws-ec2-metadata-token-ttl-seconds: 60"},
 	)
-	if !ok || len(reply) == 0 || len(reply) > len(token_buf) {
-		return nil, {kind = .Unavailable, source = .EC2}
-	}
 	token := string(reply)
-	if strings.contains_any(token, "\r\n") {
+	if !ok || token == "" || len(token) > CREDENTIAL_IMDS_TOKEN_MAX ||
+	   strings.contains_any(token, "\r\n") {
 		return nil, {kind = .Unavailable, source = .EC2}
 	}
-	copy(token_buf[:len(reply)], reply)
+	token_header := fmt.tprintf("X-aws-ec2-metadata-token: %s", token)
 	role, role_ok := credential_metadata_call(
 		cache.execute,
 		"GET",
 		"http://169.254.169.254/latest/meta-data/iam/security-credentials/",
-		{fmt.tprintf("X-aws-ec2-metadata-token: %s", string(token_buf[:len(reply)]))},
+		{token_header},
 	)
 	role_name := strings.trim_space(string(role))
 	if !role_ok || role_name == "" || len(role_name) > CREDENTIAL_ROLE_MAX ||
 	   strings.contains_any(role_name, "/\r\n?#\\@") {
 		return nil, {kind = .Unavailable, source = .EC2}
 	}
-	role_buf: [CREDENTIAL_ROLE_MAX]byte
-	defer mem.zero_explicit(&role_buf, size_of(role_buf))
-	copy(role_buf[:len(role_name)], role_name)
 	return credential_fetch_document(
 		cache,
 		.EC2,
 		fmt.tprintf(
 			"http://169.254.169.254/latest/meta-data/iam/security-credentials/%s",
-			string(role_buf[:len(role_name)]),
+			role_name,
 		),
-		{fmt.tprintf("X-aws-ec2-metadata-token: %s", string(token_buf[:len(reply)]))},
+		{token_header},
 	)
 }
 
@@ -739,24 +703,11 @@ credential_fetch_document :: proc(
 	if document.code != "" && document.code != "Success" {
 		return nil, {kind = .Unavailable, source = source}
 	}
-	access_buf: [CREDENTIAL_ACCESS_MAX]byte
-	secret_buf: [CREDENTIAL_SECRET_MAX]byte
-	token_buf: [CREDENTIAL_TOKEN_MAX]byte
-	defer mem.zero_explicit(&access_buf, size_of(access_buf))
-	defer mem.zero_explicit(&secret_buf, size_of(secret_buf))
-	defer mem.zero_explicit(&token_buf, size_of(token_buf))
-	if !credential_store_bounded(
-		&access_buf,
-		&secret_buf,
-		&token_buf,
-		document.access,
-		document.secret,
-		document.token,
-	) || !aws_credentials_valid({document.access, document.secret, document.token}) {
+	if !credential_bounded_valid({document.access, document.secret, document.token}) {
 		return nil, {kind = .Unavailable, source = source}
 	}
-	expires, expiry_ok := credential_expiration(document.expiration)
-	if !expiry_ok {
+	expires, consumed := time.rfc3339_to_time_utc(document.expiration)
+	if document.expiration == "" || consumed != len(document.expiration) {
 		return nil, {kind = .Unavailable, source = source}
 	}
 	now := cache.clock(cache.clock_data)
@@ -766,24 +717,12 @@ credential_fetch_document :: proc(
 	return credential_snapshot_new(
 		cache.allocator,
 		source,
-		string(access_buf[:len(document.access)]),
-		string(secret_buf[:len(document.secret)]),
-		string(token_buf[:len(document.token)]),
+		document.access,
+		document.secret,
+		document.token,
 		expires,
 		true,
 	)
-}
-
-@(private)
-credential_expiration :: proc(value: string) -> (expires: time.Time, ok: bool) {
-	if value == "" {
-		return {}, false
-	}
-	parsed, consumed := time.rfc3339_to_time_utc(value)
-	if consumed != len(value) {
-		return {}, false
-	}
-	return parsed, true
 }
 
 @(private)
@@ -842,19 +781,11 @@ credential_relative_uri_ok :: proc(relative: string) -> bool {
 }
 
 @(private)
-credential_store_bounded :: proc(
-	access_buf: ^[CREDENTIAL_ACCESS_MAX]byte,
-	secret_buf: ^[CREDENTIAL_SECRET_MAX]byte,
-	token_buf: ^[CREDENTIAL_TOKEN_MAX]byte,
-	access, secret, token: string,
-) -> bool {
-	if len(access) > len(access_buf) || len(secret) > len(secret_buf) || len(token) > len(token_buf) {
-		return false
-	}
-	copy(access_buf[:len(access)], access)
-	copy(secret_buf[:len(secret)], secret)
-	copy(token_buf[:len(token)], token)
-	return true
+credential_bounded_valid :: proc(value: AWS_Credentials) -> bool {
+	return len(value.access_key) <= CREDENTIAL_ACCESS_MAX &&
+		len(value.secret_key) <= CREDENTIAL_SECRET_MAX &&
+		len(value.session_token) <= CREDENTIAL_TOKEN_MAX &&
+		aws_credentials_valid(value)
 }
 
 @(private)
@@ -864,14 +795,6 @@ credential_env :: proc(key: string) -> string {
 
 @(private)
 credential_wipe_text :: proc(value: string) {
-	if len(value) == 0 {
-		return
-	}
-	mem.zero_explicit(raw_data(value), len(value))
-}
-
-@(private)
-credential_wipe_bytes :: proc(value: []byte) {
 	if len(value) == 0 {
 		return
 	}

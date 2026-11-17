@@ -38,11 +38,18 @@ credential_test_env_mutex: sync.Mutex
 credential_test_env_push :: proc() -> []Credential_Env_Slot {
 	sync.mutex_lock(&credential_test_env_mutex)
 	saved := make([]Credential_Env_Slot, len(CREDENTIAL_TEST_KEYS))
+
 	for key, index in CREDENTIAL_TEST_KEYS {
 		value, found := os.lookup_env(key, context.allocator)
-		saved[index] = {key = key, value = value, found = found}
+		saved[index] = {
+			key   = key,
+			value = value,
+			found = found,
+		}
+
 		os.unset_env(key)
 	}
+
 	return saved
 }
 
@@ -50,17 +57,21 @@ credential_test_env_pop :: proc(saved: []Credential_Env_Slot) {
 	if saved == nil {
 		return
 	}
+
 	defer sync.mutex_unlock(&credential_test_env_mutex)
+
 	for slot in saved {
 		if slot.found {
 			os.set_env(slot.key, slot.value)
 		} else {
 			os.unset_env(slot.key)
 		}
+
 		if slot.value != "" {
 			delete(slot.value)
 		}
 	}
+
 	delete(saved)
 }
 
@@ -75,6 +86,7 @@ credential_test_clock :: proc(data: rawptr) -> time.Time {
 credential_test_instant :: proc(text: string) -> time.Time {
 	parsed, consumed := time.rfc3339_to_time_utc(text)
 	assert(consumed == len(text))
+
 	return parsed
 }
 
@@ -109,8 +121,13 @@ credential_test_http :: proc(
 ) {
 	state := credential_test_http_state
 	state.calls += 1
-	if !allow_http || timeout_ms != 1500 || upload_file != nil || upload_size != 0 || ca_file != "" ||
-	   len(body) != 0 || !credential_metadata_url_permitted(url) {
+	if !allow_http ||
+	   timeout_ms != 1500 ||
+	   upload_file != nil ||
+	   upload_size != 0 ||
+	   ca_file != "" ||
+	   len(body) != 0 ||
+	   !credential_metadata_url_permitted(url) {
 		state.rejected = url
 		return nil, {ok = false, status = 400}
 	}
@@ -119,9 +136,11 @@ credential_test_http :: proc(
 		sync.mutex_lock(&state.mutex)
 		state.entered += 1
 		sync.cond_broadcast(&state.cond)
+
 		for !state.release {
 			sync.cond_wait(&state.cond, &state.mutex)
 		}
+
 		sync.mutex_unlock(&state.mutex)
 	}
 	if state.fail && state.calls > 1 {
@@ -131,11 +150,12 @@ credential_test_http :: proc(
 		if method == "PUT" && url == "http://169.254.169.254/latest/api/token" {
 			return transmute([]u8)string("imds-token"), {ok = true, status = 200}
 		}
+
 		if method == "GET" && url == "http://169.254.169.254/latest/meta-data/iam/security-credentials/" {
 			return transmute([]u8)string("fixture-role\n"), {ok = true, status = 200}
 		}
-		if method != "GET" ||
-		   url != "http://169.254.169.254/latest/meta-data/iam/security-credentials/fixture-role" {
+
+		if method != "GET" || url != "http://169.254.169.254/latest/meta-data/iam/security-credentials/fixture-role" {
 			state.rejected = url
 			return nil, {ok = false}
 		}
@@ -160,6 +180,7 @@ credential_test_provider_entered :: proc() -> bool {
 	sync.mutex_lock(&state.mutex)
 	entered := state.entered
 	sync.mutex_unlock(&state.mutex)
+
 	return entered >= 1
 }
 
@@ -168,6 +189,7 @@ credential_test_waiters_reached :: proc() -> bool {
 	sync.mutex_lock(&cache.mutex)
 	count := cache.waiters
 	sync.mutex_unlock(&cache.mutex)
+
 	return count == credential_test_waiters_target
 }
 
@@ -201,8 +223,10 @@ credential_test_wait_until :: proc(ready: proc() -> bool) -> bool {
 		if ready() {
 			return true
 		}
+
 		time.sleep(time.Millisecond)
 	}
+
 	return false
 }
 
@@ -216,11 +240,13 @@ credential_probe_contains :: proc(haystack: []byte, needle: string) -> bool {
 	if len(needle) == 0 || len(haystack) < len(needle) {
 		return false
 	}
+
 	for index in 0 ..= len(haystack) - len(needle) {
 		if string(haystack[index:][:len(needle)]) == needle {
 			return true
 		}
 	}
+
 	return false
 }
 
@@ -239,6 +265,7 @@ credential_probe_allocate :: proc(
 	if mode == .Free && old_memory != nil && old_size > 0 {
 		probe.frees += 1
 		bytes := ([^]byte)(old_memory)[:old_size]
+
 		if credential_probe_contains(bytes, "old-secret") || credential_probe_contains(bytes, "new-secret") {
 			probe.visible = true
 		}
@@ -263,9 +290,11 @@ credential_metadata_urls_reject_arbitrary_hosts :: proc(t: ^testing.T) {
 		"http://169.254.170.2//v2/credentials/fixture",
 		"http://example.com/latest/api/token",
 	}
+
 	for refused in refused_urls {
 		testing.expect(t, !credential_metadata_url_permitted(refused))
 	}
+
 	testing.expect(t, !credential_ec2_probe_permitted({}))
 }
 
@@ -284,10 +313,12 @@ credential_expiry_uses_injected_clock_and_keeps_one_snapshot :: proc(t: ^testing
 	clock := Credential_Test_Clock {
 		now = time.unix(0, time.time_to_unix_nano(expires) - 1),
 	}
+
 	http := Credential_Test_HTTP {
-		body = CREDENTIAL_TEST_OLD,
+		body      = CREDENTIAL_TEST_OLD,
 		next_body = CREDENTIAL_TEST_NEW,
 	}
+
 	credential_test_http_state = &http
 	defer credential_test_http_state = nil
 	cache: Credential_Cache
@@ -308,7 +339,10 @@ credential_expiry_uses_injected_clock_and_keeps_one_snapshot :: proc(t: ^testing
 	defer credential_lease_release(&cache, &third)
 	testing.expect_value(t, third_error.kind, .None)
 	testing.expect_value(t, http.calls, 2)
-	testing.expect(t, third.access_key == "new-key" && third.secret_key == "new-secret" && third.session_token == "new-token")
+	testing.expect(
+		t,
+		third.access_key == "new-key" && third.secret_key == "new-secret" && third.session_token == "new-token",
+	)
 	testing.expect(
 		t,
 		first.access_key == "old-key" && first.secret_key == "old-secret" && first.session_token == "old-token",
@@ -331,23 +365,22 @@ credential_failed_refresh_does_not_publish_or_return_secrets :: proc(t: ^testing
 	clock := Credential_Test_Clock {
 		now = time.unix(0, time.time_to_unix_nano(expires) - 1),
 	}
+
 	probe := Credential_Probe {
 		backing = context.allocator,
 	}
+
 	http := Credential_Test_HTTP {
 		body = CREDENTIAL_TEST_OLD,
 		fail = true,
 	}
+
 	credential_test_http_state = &http
 	defer credential_test_http_state = nil
 	cache: Credential_Cache
 	testing.expect_value(
 		t,
-		credential_test_cache(
-			&cache,
-			&clock,
-			{procedure = credential_probe_allocate, data = &probe},
-		).kind,
+		credential_test_cache(&cache, &clock, {procedure = credential_probe_allocate, data = &probe}).kind,
 		.None,
 	)
 	held, held_error := credential_lease(&cache)
@@ -356,9 +389,15 @@ credential_failed_refresh_does_not_publish_or_return_secrets :: proc(t: ^testing
 	failed, failed_error := credential_lease(&cache)
 	testing.expect_value(t, failed_error.kind, .Unavailable)
 	testing.expect_value(t, failed_error.source, .ECS)
-	testing.expect(t, failed.snapshot == nil && failed.access_key == "" && failed.secret_key == "" && failed.session_token == "")
+	testing.expect(
+		t,
+		failed.snapshot == nil && failed.access_key == "" && failed.secret_key == "" && failed.session_token == "",
+	)
 	testing.expect_value(t, http.calls, 2)
-	testing.expect(t, held.access_key == "old-key" && held.secret_key == "old-secret" && held.session_token == "old-token")
+	testing.expect(
+		t,
+		held.access_key == "old-key" && held.secret_key == "old-secret" && held.session_token == "old-token",
+	)
 	testing.expect_value(t, credential_cache_destroy(&cache).kind, .Busy)
 	testing.expect(t, !probe.visible && probe.frees == 0, "a live reader keeps the snapshot allocated")
 	credential_lease_release(&cache, &held)
@@ -380,10 +419,12 @@ credential_cancelled_waiter_does_not_receive_the_snapshot :: proc(t: ^testing.T)
 	clock := Credential_Test_Clock {
 		now = credential_test_instant("2023-12-01T00:00:00Z"),
 	}
+
 	http := Credential_Test_HTTP {
-		body = CREDENTIAL_TEST_OLD,
+		body  = CREDENTIAL_TEST_OLD,
 		block = true,
 	}
+
 	credential_test_http_state = &http
 	defer credential_test_http_state = nil
 	cache: Credential_Cache
@@ -391,27 +432,39 @@ credential_cancelled_waiter_does_not_receive_the_snapshot :: proc(t: ^testing.T)
 	defer {
 		credential_cache_destroy(&cache)
 	}
+
 	leader := Credential_Test_Call {
 		cache = &cache,
 	}
+
 	leader_thread := thread.create_and_start_with_poly_data(&leader, credential_test_call)
 	testing.expect(t, leader_thread != nil)
-	testing.expect(t, credential_test_wait_until(credential_test_provider_entered), "refresh entered the fake provider")
+	testing.expect(
+		t,
+		credential_test_wait_until(credential_test_provider_entered),
+		"refresh entered the fake provider",
+	)
 	cancel := Credential_Cancel{}
 	waiter := Credential_Test_Call {
-		cache = &cache,
+		cache  = &cache,
 		cancel = &cancel,
 	}
+
 	other := Credential_Test_Call {
 		cache = &cache,
 	}
+
 	waiter_thread := thread.create_and_start_with_poly_data(&waiter, credential_test_call)
 	other_thread := thread.create_and_start_with_poly_data(&other, credential_test_call)
 	testing.expect(t, waiter_thread != nil && other_thread != nil)
 	credential_test_cache_state = &cache
 	credential_test_waiters_target = 2
 	defer credential_test_cache_state = nil
-	testing.expect(t, credential_test_wait_until(credential_test_waiters_reached), "both followers wait on the one refresh")
+	testing.expect(
+		t,
+		credential_test_wait_until(credential_test_waiters_reached),
+		"both followers wait on the one refresh",
+	)
 	credential_cancel(&cache, &cancel)
 	sync.mutex_lock(&http.mutex)
 	http.release = true
@@ -425,15 +478,23 @@ credential_cancelled_waiter_does_not_receive_the_snapshot :: proc(t: ^testing.T)
 	thread.destroy(other_thread)
 	testing.expect_value(t, http.calls, 1)
 	testing.expect_value(t, waiter.error.kind, .Cancelled)
-	testing.expect(t, waiter.lease.snapshot == nil && waiter.lease.access_key == "" && waiter.lease.secret_key == "" && waiter.lease.session_token == "")
+	testing.expect(
+		t,
+		waiter.lease.snapshot == nil &&
+		waiter.lease.access_key == "" &&
+		waiter.lease.secret_key == "" &&
+		waiter.lease.session_token == "",
+	)
 	testing.expect(t, leader.error.kind == .None && other.error.kind == .None)
 	testing.expect(t, leader.lease.secret_key == "old-secret" && other.lease.secret_key == "old-secret")
 	testing.expect(t, leader.lease.access_key == "old-key" && other.lease.session_token == "old-token")
 	sync.mutex_lock(&cache.mutex)
 	readers := 0
+
 	if cache.snapshot != nil {
 		readers = cache.snapshot.readers
 	}
+
 	sync.mutex_unlock(&cache.mutex)
 	testing.expect_value(t, readers, 2)
 	credential_lease_release(&cache, &leader.lease)
@@ -453,10 +514,12 @@ credential_waiter_limit_does_not_hand_out_credentials :: proc(t: ^testing.T) {
 	clock := Credential_Test_Clock {
 		now = credential_test_instant("2023-12-01T00:00:00Z"),
 	}
+
 	http := Credential_Test_HTTP {
-		body = CREDENTIAL_TEST_OLD,
+		body  = CREDENTIAL_TEST_OLD,
 		block = true,
 	}
+
 	credential_test_http_state = &http
 	defer credential_test_http_state = nil
 	cache: Credential_Cache
@@ -464,41 +527,56 @@ credential_waiter_limit_does_not_hand_out_credentials :: proc(t: ^testing.T) {
 	leader := Credential_Test_Call {
 		cache = &cache,
 	}
+
 	leader_thread := thread.create_and_start_with_poly_data(&leader, credential_test_call)
 	testing.expect(t, leader_thread != nil)
 	testing.expect(t, credential_test_wait_until(credential_test_provider_entered))
 	waiters: [CREDENTIAL_WAITERS_MAX]Credential_Test_Call
 	workers: [CREDENTIAL_WAITERS_MAX]^thread.Thread
+
 	for index in 0 ..< CREDENTIAL_WAITERS_MAX {
 		waiters[index].cache = &cache
 		workers[index] = thread.create_and_start_with_poly_data(&waiters[index], credential_test_call)
 		testing.expect(t, workers[index] != nil)
 	}
+
 	credential_test_cache_state = &cache
 	credential_test_waiters_target = CREDENTIAL_WAITERS_MAX
 	defer credential_test_cache_state = nil
+
 	if testing.expect(t, credential_test_wait_until(credential_test_waiters_reached)) {
 		limited, limit_error := credential_lease(&cache)
 		testing.expect_value(t, limit_error.kind, .Waiter_Limit)
-		testing.expect(t, limited.snapshot == nil && limited.secret_key == "" && limited.access_key == "" && limited.session_token == "")
+		testing.expect(
+			t,
+			limited.snapshot == nil &&
+			limited.secret_key == "" &&
+			limited.access_key == "" &&
+			limited.session_token == "",
+		)
 		testing.expect_value(t, http.calls, 1)
 	}
+
 	sync.mutex_lock(&http.mutex)
 	http.release = true
 	sync.cond_broadcast(&http.cond)
 	sync.mutex_unlock(&http.mutex)
 	thread.join(leader_thread)
 	thread.destroy(leader_thread)
+
 	for worker in workers {
 		thread.join(worker)
 		thread.destroy(worker)
 	}
+
 	testing.expect(t, leader.error.kind == .None && leader.lease.secret_key == "old-secret")
 	credential_lease_release(&cache, &leader.lease)
+
 	for &waiter in waiters {
 		testing.expect(t, waiter.error.kind == .None && waiter.lease.secret_key == "old-secret")
 		credential_lease_release(&cache, &waiter.lease)
 	}
+
 	testing.expect_value(t, credential_cache_destroy(&cache).kind, .None)
 	testing.expect_value(t, http.calls, 1)
 }
@@ -517,9 +595,11 @@ credential_static_sources_cache_and_fail_closed :: proc(t: ^testing.T) {
 	clock := Credential_Test_Clock {
 		now = credential_test_instant("2024-01-01T00:00:00Z"),
 	}
+
 	http := Credential_Test_HTTP {
 		body = CREDENTIAL_TEST_OLD,
 	}
+
 	credential_test_http_state = &http
 	defer credential_test_http_state = nil
 	cache: Credential_Cache
@@ -565,7 +645,14 @@ credential_static_sources_cache_and_fail_closed :: proc(t: ^testing.T) {
 	defer credential_cache_destroy(&profile_cache)
 	loaded, loaded_error := credential_lease(&profile_cache)
 	testing.expect(t, loaded_error.kind == .None && loaded.source == .Profile && loaded.access_key == "profile-key")
-	testing.expect(t, os.write_entire_file(path, "[default]\naws_access_key_id=changed-key\naws_secret_access_key=changed-secret\n") == nil)
+	testing.expect(
+		t,
+		os.write_entire_file(
+			path,
+			"[default]\naws_access_key_id=changed-key\naws_secret_access_key=changed-secret\n",
+		) ==
+		nil,
+	)
 	cached, cached_error := credential_lease(&profile_cache)
 	testing.expect(t, cached_error.kind == .None && cached.access_key == "profile-key" && http.calls == 0)
 	credential_lease_release(&profile_cache, &cached)
@@ -584,9 +671,11 @@ credential_unsupported_modes_are_typed_and_not_fetched :: proc(t: ^testing.T) {
 	clock := Credential_Test_Clock {
 		now = credential_test_instant("2023-12-01T00:00:00Z"),
 	}
+
 	http := Credential_Test_HTTP {
 		body = CREDENTIAL_TEST_OLD,
 	}
+
 	credential_test_http_state = &http
 	defer credential_test_http_state = nil
 
@@ -622,17 +711,22 @@ credential_unsupported_modes_are_typed_and_not_fetched :: proc(t: ^testing.T) {
 	defer os.remove(path)
 	testing.expect(t, os.set_env("AWS_SHARED_CREDENTIALS_FILE", path) == nil)
 	cases := []struct {
-		text:         string,
-		unsupported:  Credential_Unsupported,
-	}{
+		text:        string,
+		unsupported: Credential_Unsupported,
+	} {
 		{"[default]\nsso_start_url=https://example.awsapps.com/start\nsso_account_id=1\nsso_role_name=role\n", .SSO},
 		{"[default]\ncredential_process=/usr/bin/false\n", .Credential_Process},
-		{"[default]\nrole_arn=arn:aws:iam::1:role/refused\nsource_profile=default\naws_access_key_id=should-not-leak\naws_secret_access_key=should-not-leak\n", .Assumed_Role},
+		{
+			"[default]\nrole_arn=arn:aws:iam::1:role/refused\nsource_profile=default\naws_access_key_id=should-not-leak\naws_secret_access_key=should-not-leak\n",
+			.Assumed_Role,
+		},
 	}
+
 	for item in cases {
 		testing.expect(t, os.write_entire_file(path, item.text) == nil)
 		expect_refused(t, &clock, &http, item.unsupported, .Profile)
 	}
+
 	os.unset_env("AWS_SHARED_CREDENTIALS_FILE")
 	credential_test_absent(directory)
 	testing.expect(t, os.set_env("AWS_CONTAINER_CREDENTIALS_FULL_URI", "http://127.0.0.1/creds") == nil)
@@ -653,23 +747,19 @@ credential_metadata_probe_is_explicit :: proc(t: ^testing.T) {
 	clock := Credential_Test_Clock {
 		now = time.unix(0, time.time_to_unix_nano(credential_test_instant("2024-01-01T00:00:00Z")) - 1),
 	}
+
 	http := Credential_Test_HTTP {
 		body = CREDENTIAL_TEST_OLD,
-		ec2 = true,
+		ec2  = true,
 	}
+
 	credential_test_http_state = &http
 	defer credential_test_http_state = nil
 
 	without_ec2: Credential_Cache
 	testing.expect_value(
 		t,
-		credential_cache_init(
-			&without_ec2,
-			credential_test_http,
-			credential_test_clock,
-			&clock,
-			{.Environment, .Profile, .ECS},
-		).kind,
+		credential_cache_init(&without_ec2, credential_test_http, credential_test_clock, &clock, {.Environment, .Profile, .ECS}).kind,
 		.None,
 	)
 	testing.expect(t, os.unset_env("AWS_EC2_METADATA_DISABLED"))
@@ -708,7 +798,10 @@ credential_metadata_probe_is_explicit :: proc(t: ^testing.T) {
 	refreshed, refresh_error := credential_lease(&probed)
 	defer credential_lease_release(&probed, &refreshed)
 	testing.expect(t, refresh_error.kind == .None && refreshed.secret_key == "new-secret" && http.calls == 6)
-	testing.expect(t, lease.secret_key == "old-secret" && lease.access_key == "old-key" && lease.session_token == "old-token")
+	testing.expect(
+		t,
+		lease.secret_key == "old-secret" && lease.access_key == "old-key" && lease.session_token == "old-token",
+	)
 }
 
 @(test)
@@ -724,9 +817,11 @@ credential_expired_document_is_not_cached :: proc(t: ^testing.T) {
 	clock := Credential_Test_Clock {
 		now = credential_test_instant("2024-02-01T00:00:00Z"),
 	}
+
 	http := Credential_Test_HTTP {
 		body = CREDENTIAL_TEST_OLD,
 	}
+
 	credential_test_http_state = &http
 	defer credential_test_http_state = nil
 	cache: Credential_Cache

@@ -15,12 +15,7 @@ aws_credentials :: proc() -> (credentials: AWS_Credentials, ok: bool) {
 	return aws_credentials_with_http(network_client.buffered_http_execute)
 }
 
-aws_credentials_with_http :: proc(
-	http_execute: HTTP_Execute,
-) -> (
-	credentials: AWS_Credentials,
-	ok: bool,
-) {
+aws_credentials_with_http :: proc(http_execute: HTTP_Execute) -> (credentials: AWS_Credentials, ok: bool) {
 	if http_execute == nil {
 		return
 	}
@@ -30,29 +25,32 @@ aws_credentials_with_http :: proc(
 		secret_key    = os.get_env("AWS_SECRET_ACCESS_KEY", context.temp_allocator),
 		session_token = os.get_env("AWS_SESSION_TOKEN", context.temp_allocator),
 	}
-	if credentials.access_key != "" ||
-	   credentials.secret_key != "" ||
-	   credentials.session_token != "" {
+
+	if credentials.access_key != "" || credentials.secret_key != "" || credentials.session_token != "" {
 		return credentials, aws_credentials_valid(credentials)
 	}
+
 	profile := os.get_env("AWS_PROFILE", context.temp_allocator)
 	if profile == "" do profile = "default"
 	path := os.get_env("AWS_SHARED_CREDENTIALS_FILE", context.temp_allocator)
+
 	if path == "" {
 		path = fmt.tprintf("%s/.aws/credentials", os.get_env("HOME", context.temp_allocator))
 	}
+
 	file_credentials, _, _, file_error := credential_profile_load(path, profile, false)
+
 	if file_error.kind != .None && file_error.kind != .Open_Failed {
 		return
 	}
-	if file_credentials.access_key != "" ||
-	   file_credentials.secret_key != "" ||
-	   file_credentials.session_token != "" {
+
+	if file_credentials.access_key != "" || file_credentials.secret_key != "" || file_credentials.session_token != "" {
 		return file_credentials, aws_credentials_valid(file_credentials)
 	}
 
 	relative := os.get_env("AWS_CONTAINER_CREDENTIALS_RELATIVE_URI", context.temp_allocator)
 	url, token := "", ""
+
 	if relative != "" {
 		// Same acceptance rule as before caching: one slash-prefixed path, no line breaks.
 		if !strings.has_prefix(relative, "/") || strings.contains_any(relative, "\r\n#") do return
@@ -85,14 +83,14 @@ aws_credentials_with_http :: proc(
 			0,
 		)
 		role_name := strings.trim_space(string(role))
+
 		if !role_result.ok || role_name == "" || strings.contains_any(role_name, "/\r\n?#") {
 			return
 		}
-		url = fmt.tprintf(
-			"http://169.254.169.254/latest/meta-data/iam/security-credentials/%s",
-			role_name,
-		)
+
+		url = fmt.tprintf("http://169.254.169.254/latest/meta-data/iam/security-credentials/%s", role_name)
 	}
+
 	headers: []string
 	if token != "" do headers = {fmt.tprintf("X-aws-ec2-metadata-token: %s", token)}
 	data, result := http_execute("GET", url, nil, headers, "", true, 1500, nil, 0)
@@ -102,16 +100,20 @@ aws_credentials_with_http :: proc(
 		secret: string `json:"SecretAccessKey"`,
 		token:  string `json:"Token"`,
 	}
+
 	if json.unmarshal(data, &document, allocator = context.temp_allocator) != nil do return
 	credentials = {document.access, document.secret, document.token}
+
 	return credentials, aws_credentials_valid(credentials)
 }
 
 aws_credentials_valid :: proc(value: AWS_Credentials) -> bool {
 	if value.access_key == "" || value.secret_key == "" do return false
+
 	for text in ([]string{value.access_key, value.secret_key, value.session_token}) {
 		if strings.contains_any(text, "\r\n\x00") do return false
 	}
+
 	return true
 }
 
@@ -159,9 +161,9 @@ Credential_Error_Kind :: enum {
 }
 
 Credential_Error :: struct {
-	kind:         Credential_Error_Kind,
-	source:       Credential_Source,
-	unsupported:  Credential_Unsupported,
+	kind:        Credential_Error_Kind,
+	source:      Credential_Source,
+	unsupported: Credential_Unsupported,
 }
 
 // One published triple. Fields are written only before the cache stores the pointer.
@@ -203,21 +205,21 @@ CREDENTIAL_IMDS_TOKEN_MAX :: 4096
 CREDENTIAL_RELATIVE_MAX :: 1024
 
 Credential_Cache :: struct {
-	execute:          HTTP_Execute,
-	clock:            Credential_Clock,
-	clock_data:       rawptr,
-	modes:            Credential_Modes,
-	allocator:        mem.Allocator,
-	mutex:            sync.Mutex,
-	cond:             sync.Cond,
-	snapshot:         ^Credential_Snapshot,
-	refresh_active:   bool,
-	refresh_attempt:  u64,
-	failed_attempt:   u64,
-	refresh_error:    Credential_Error,
-	waiters:          int,
-	live_readers:     int,
-	closed:           bool,
+	execute:         HTTP_Execute,
+	clock:           Credential_Clock,
+	clock_data:      rawptr,
+	modes:           Credential_Modes,
+	allocator:       mem.Allocator,
+	mutex:           sync.Mutex,
+	cond:            sync.Cond,
+	snapshot:        ^Credential_Snapshot,
+	refresh_active:  bool,
+	refresh_attempt: u64,
+	failed_attempt:  u64,
+	refresh_error:   Credential_Error,
+	waiters:         int,
+	live_readers:    int,
+	closed:          bool,
 }
 
 credential_cache_init :: proc(
@@ -228,8 +230,12 @@ credential_cache_init :: proc(
 	modes: Credential_Modes = CREDENTIAL_MODES_SUPPORTED,
 	allocator := context.allocator,
 ) -> Credential_Error {
-	if cache == nil || execute == nil || clock == nil || allocator.procedure == nil ||
-	   cache.snapshot != nil || cache.refresh_active {
+	if cache == nil ||
+	   execute == nil ||
+	   clock == nil ||
+	   allocator.procedure == nil ||
+	   cache.snapshot != nil ||
+	   cache.refresh_active {
 		return {kind = .Invalid_Argument}
 	}
 	cache.execute = execute
@@ -251,16 +257,20 @@ credential_cache_destroy :: proc(cache: ^Credential_Cache) -> Credential_Error {
 	if cache == nil {
 		return {kind = .Invalid_Argument}
 	}
+
 	sync.mutex_lock(&cache.mutex)
+
 	if cache.refresh_active || cache.waiters != 0 || cache.live_readers != 0 {
 		sync.mutex_unlock(&cache.mutex)
 		return {kind = .Busy}
 	}
+
 	snap := cache.snapshot
 	cache.snapshot = nil
 	cache.closed = true
 	sync.mutex_unlock(&cache.mutex)
 	credential_snapshot_erase(cache, snap)
+
 	return {}
 }
 
@@ -268,10 +278,13 @@ credential_cancel :: proc(cache: ^Credential_Cache, cancel: ^Credential_Cancel) 
 	if cancel == nil {
 		return
 	}
+
 	sync.atomic_store(&cancel.cancelled, 1)
+
 	if cache == nil {
 		return
 	}
+
 	sync.mutex_lock(&cache.mutex)
 	sync.cond_broadcast(&cache.cond)
 	sync.mutex_unlock(&cache.mutex)
@@ -282,6 +295,7 @@ credential_ec2_probe_permitted :: proc(modes: Credential_Modes) -> bool {
 	if .EC2 not_in modes {
 		return false
 	}
+
 	return os.get_env("AWS_EC2_METADATA_DISABLED", context.temp_allocator) != "true"
 }
 
@@ -301,44 +315,57 @@ credential_lease :: proc(
 			sync.mutex_unlock(&cache.mutex)
 			return {}, {kind = .Closed}
 		}
+
 		if credential_cancelled(cancel) {
 			sync.mutex_unlock(&cache.mutex)
 			return {}, {kind = .Cancelled}
 		}
+
 		now := cache.clock(cache.clock_data)
+
 		if credential_snapshot_usable(cache.snapshot, now) {
 			lease = credential_snapshot_borrow(cache.snapshot)
 			cache.live_readers += 1
 			sync.mutex_unlock(&cache.mutex)
 			return lease, {}
 		}
+
 		if cache.refresh_active {
 			if cache.waiters >= CREDENTIAL_WAITERS_MAX {
 				sync.mutex_unlock(&cache.mutex)
 				return {}, {kind = .Waiter_Limit}
 			}
+
 			target := cache.refresh_attempt
 			cache.waiters += 1
+
 			for cache.refresh_active && cache.refresh_attempt == target && !credential_cancelled(cancel) {
 				sync.cond_wait(&cache.cond, &cache.mutex)
 			}
+
 			cache.waiters -= 1
+
 			if credential_cancelled(cancel) {
 				sync.mutex_unlock(&cache.mutex)
 				return {}, {kind = .Cancelled}
 			}
+
 			if cache.refresh_active {
 				continue
 			}
+
 			now = cache.clock(cache.clock_data)
+
 			if credential_snapshot_usable(cache.snapshot, now) {
 				continue
 			}
+
 			if cache.failed_attempt == target && cache.refresh_error.kind != .None {
 				error = cache.refresh_error
 				sync.mutex_unlock(&cache.mutex)
 				return {}, error
 			}
+
 			continue
 		}
 
@@ -351,8 +378,8 @@ credential_lease :: proc(
 		now = cache.clock(cache.clock_data)
 
 		sync.mutex_lock(&cache.mutex)
-		if resolve_error.kind == .None && snap != nil &&
-		   credential_snapshot_usable(snap, now) && !cache.closed {
+
+		if resolve_error.kind == .None && snap != nil && credential_snapshot_usable(snap, now) && !cache.closed {
 			credential_snapshot_retire(cache, cache.snapshot)
 			cache.snapshot = snap
 			snap = nil
@@ -360,35 +387,47 @@ credential_lease :: proc(
 			cache.refresh_error = {}
 		} else {
 			if resolve_error.kind == .None && snap != nil {
-				resolve_error = {kind = .Expired, source = snap.source}
+				resolve_error = {
+					kind   = .Expired,
+					source = snap.source,
+				}
 			}
+
 			credential_snapshot_erase(cache, snap)
 			snap = nil
 			cache.refresh_error = resolve_error
 			cache.failed_attempt = target
+
 			if cache.snapshot != nil && !credential_snapshot_usable(cache.snapshot, now) {
 				stale := cache.snapshot
 				cache.snapshot = nil
 				credential_snapshot_retire(cache, stale)
 			}
 		}
+
 		cache.refresh_active = false
 		sync.cond_broadcast(&cache.cond)
+
 		if credential_cancelled(cancel) {
 			sync.mutex_unlock(&cache.mutex)
 			return {}, {kind = .Cancelled}
 		}
+
 		now = cache.clock(cache.clock_data)
+
 		if credential_snapshot_usable(cache.snapshot, now) {
 			lease = credential_snapshot_borrow(cache.snapshot)
 			cache.live_readers += 1
 			sync.mutex_unlock(&cache.mutex)
 			return lease, {}
 		}
+
 		error = cache.refresh_error
+
 		if error.kind == .None {
 			error.kind = .Unavailable
 		}
+
 		sync.mutex_unlock(&cache.mutex)
 		return {}, error
 	}
@@ -400,19 +439,25 @@ credential_lease_release :: proc(cache: ^Credential_Cache, lease: ^Credential_Le
 		if lease != nil {
 			lease^ = {}
 		}
+
 		return
 	}
+
 	snap := lease.snapshot
 	lease^ = {}
 	sync.mutex_lock(&cache.mutex)
 	defer sync.mutex_unlock(&cache.mutex)
+
 	if snap.readers <= 0 {
 		return
 	}
+
 	snap.readers -= 1
+
 	if cache.live_readers > 0 {
 		cache.live_readers -= 1
 	}
+
 	if snap.retired && snap.readers == 0 {
 		credential_snapshot_erase(cache, snap)
 	}
@@ -423,6 +468,7 @@ credential_cancelled :: proc(cancel: ^Credential_Cancel) -> bool {
 	if cancel == nil {
 		return false
 	}
+
 	return sync.atomic_load(&cancel.cancelled) != 0
 }
 
@@ -431,15 +477,18 @@ credential_snapshot_usable :: proc(snap: ^Credential_Snapshot, now: time.Time) -
 	if snap == nil || snap.retired {
 		return false
 	}
+
 	if !snap.has_expiry {
 		return true
 	}
+
 	return time.diff(now, snap.expires) > 0
 }
 
 @(private)
 credential_snapshot_borrow :: proc(snap: ^Credential_Snapshot) -> Credential_Lease {
 	snap.readers += 1
+
 	return {
 		snapshot = snap,
 		source = snap.source,
@@ -456,7 +505,9 @@ credential_snapshot_retire :: proc(cache: ^Credential_Cache, snap: ^Credential_S
 	if snap == nil {
 		return
 	}
+
 	snap.retired = true
+
 	if snap.readers == 0 {
 		credential_snapshot_erase(cache, snap)
 	}
@@ -467,14 +518,18 @@ credential_snapshot_erase :: proc(cache: ^Credential_Cache, snap: ^Credential_Sn
 	if snap == nil {
 		return
 	}
+
 	allocator := context.allocator
+
 	if cache != nil {
 		allocator = cache.allocator
 	}
+
 	if snap.storage != nil {
 		mem.zero_explicit(raw_data(snap.storage), len(snap.storage))
 		delete(snap.storage, allocator)
 	}
+
 	snap.access_key = ""
 	snap.secret_key = ""
 	snap.session_token = ""
@@ -520,12 +575,7 @@ credential_snapshot_new :: proc(
 }
 
 @(private)
-credential_resolve :: proc(
-	cache: ^Credential_Cache,
-) -> (
-	snap: ^Credential_Snapshot,
-	error: Credential_Error,
-) {
+credential_resolve :: proc(cache: ^Credential_Cache) -> (snap: ^Credential_Snapshot, error: Credential_Error) {
 	if .Environment in cache.modes {
 		access := credential_env("AWS_ACCESS_KEY_ID")
 		secret := credential_env("AWS_SECRET_ACCESS_KEY")
@@ -533,16 +583,20 @@ credential_resolve :: proc(
 		defer credential_wipe_text(access)
 		defer credential_wipe_text(secret)
 		defer credential_wipe_text(token)
+
 		if access != "" || secret != "" || token != "" {
 			if !credential_bounded_valid({access, secret, token}) {
 				return nil, {kind = .Incomplete, source = .Environment}
 			}
+
 			// The snapshot copies the triple before the deferred wipes run.
 			return credential_snapshot_new(cache.allocator, .Environment, access, secret, token, {}, false)
 		}
 	}
+
 	web_identity := credential_env("AWS_WEB_IDENTITY_TOKEN_FILE")
 	defer credential_wipe_text(web_identity)
+
 	if web_identity != "" {
 		return nil, {kind = .Unsupported, source = .Environment, unsupported = .Web_Identity}
 	}
@@ -555,23 +609,29 @@ credential_resolve :: proc(
 		path_env := credential_env("AWS_SHARED_CREDENTIALS_FILE")
 		defer credential_wipe_text(path_env)
 		path := path_env
+
 		if path == "" {
 			home := credential_env("HOME")
 			defer credential_wipe_text(home)
 			path = fmt.tprintf("%s/.aws/credentials", home)
 		}
+
 		loaded, unsupported, data, read_error := credential_profile_load(path, profile, true)
 		defer credential_wipe_text(string(data))
+
 		if read_error.kind != .None && read_error.kind != .Open_Failed {
 			return nil, {kind = .Unavailable, source = .Profile}
 		}
+
 		if unsupported != .None {
 			return nil, {kind = .Unsupported, source = .Profile, unsupported = unsupported}
 		}
+
 		if loaded.access_key != "" || loaded.secret_key != "" || loaded.session_token != "" {
 			if !credential_bounded_valid(loaded) {
 				return nil, {kind = .Incomplete, source = .Profile}
 			}
+
 			return credential_snapshot_new(
 				cache.allocator,
 				.Profile,
@@ -586,37 +646,33 @@ credential_resolve :: proc(
 
 	full_uri := credential_env("AWS_CONTAINER_CREDENTIALS_FULL_URI")
 	defer credential_wipe_text(full_uri)
+
 	if full_uri != "" {
 		return nil, {kind = .Unsupported, source = .ECS, unsupported = .ECS_Full_URI}
 	}
+
 	if .ECS in cache.modes {
 		relative := credential_env("AWS_CONTAINER_CREDENTIALS_RELATIVE_URI")
 		defer credential_wipe_text(relative)
+
 		if relative != "" {
 			if !credential_relative_uri_ok(relative) {
 				return nil, {kind = .Incomplete, source = .ECS}
 			}
-			return credential_fetch_document(
-				cache,
-				.ECS,
-				fmt.tprintf("http://169.254.170.2%s", relative),
-				nil,
-			)
+
+			return credential_fetch_document(cache, .ECS, fmt.tprintf("http://169.254.170.2%s", relative), nil)
 		}
 	}
+
 	if credential_ec2_probe_permitted(cache.modes) {
 		return credential_fetch_ec2(cache)
 	}
+
 	return nil, {kind = .Unavailable}
 }
 
 @(private)
-credential_fetch_ec2 :: proc(
-	cache: ^Credential_Cache,
-) -> (
-	snap: ^Credential_Snapshot,
-	error: Credential_Error,
-) {
+credential_fetch_ec2 :: proc(cache: ^Credential_Cache) -> (snap: ^Credential_Snapshot, error: Credential_Error) {
 	reply, ok := credential_metadata_call(
 		cache.execute,
 		"PUT",
@@ -624,10 +680,11 @@ credential_fetch_ec2 :: proc(
 		{"X-aws-ec2-metadata-token-ttl-seconds: 60"},
 	)
 	token := string(reply)
-	if !ok || token == "" || len(token) > CREDENTIAL_IMDS_TOKEN_MAX ||
-	   strings.contains_any(token, "\r\n") {
+
+	if !ok || token == "" || len(token) > CREDENTIAL_IMDS_TOKEN_MAX || strings.contains_any(token, "\r\n") {
 		return nil, {kind = .Unavailable, source = .EC2}
 	}
+
 	token_header := fmt.tprintf("X-aws-ec2-metadata-token: %s", token)
 	role, role_ok := credential_metadata_call(
 		cache.execute,
@@ -636,17 +693,17 @@ credential_fetch_ec2 :: proc(
 		{token_header},
 	)
 	role_name := strings.trim_space(string(role))
-	if !role_ok || role_name == "" || len(role_name) > CREDENTIAL_ROLE_MAX ||
+	if !role_ok ||
+	   role_name == "" ||
+	   len(role_name) > CREDENTIAL_ROLE_MAX ||
 	   strings.contains_any(role_name, "/\r\n?#\\@") {
 		return nil, {kind = .Unavailable, source = .EC2}
 	}
+
 	return credential_fetch_document(
 		cache,
 		.EC2,
-		fmt.tprintf(
-			"http://169.254.169.254/latest/meta-data/iam/security-credentials/%s",
-			role_name,
-		),
+		fmt.tprintf("http://169.254.169.254/latest/meta-data/iam/security-credentials/%s", role_name),
 		{token_header},
 	)
 }
@@ -710,21 +767,17 @@ credential_fetch_document :: proc(
 }
 
 @(private)
-credential_metadata_call :: proc(
-	execute: HTTP_Execute,
-	method, url: string,
-	headers: []string,
-) -> (
-	[]byte,
-	bool,
-) {
+credential_metadata_call :: proc(execute: HTTP_Execute, method, url: string, headers: []string) -> ([]byte, bool) {
 	if execute == nil || !credential_metadata_url_permitted(url) {
 		return nil, false
 	}
+
 	reply, result := execute(method, url, nil, headers, "", true, 1500, nil, 0)
+
 	if !result.ok {
 		return nil, false
 	}
+
 	return reply, true
 }
 
@@ -734,19 +787,25 @@ credential_metadata_url_permitted :: proc(url: string) -> bool {
 	if strings.contains_any(url, "\r\n\\@ ") || !strings.contains(url, "://") {
 		return false
 	}
+
 	ecs := "http://169.254.170.2/"
+
 	if strings.has_prefix(url, ecs) {
 		return credential_relative_uri_ok(url[len("http://169.254.170.2"):])
 	}
+
 	if url == "http://169.254.169.254/latest/api/token" ||
 	   url == "http://169.254.169.254/latest/meta-data/iam/security-credentials/" {
 		return true
 	}
+
 	prefix := "http://169.254.169.254/latest/meta-data/iam/security-credentials/"
+
 	if strings.has_prefix(url, prefix) {
 		role := url[len(prefix):]
 		return role != "" && len(role) <= CREDENTIAL_ROLE_MAX && !strings.contains_any(role, "/?#\\\r\n@")
 	}
+
 	return false
 }
 
@@ -755,21 +814,26 @@ credential_relative_uri_ok :: proc(relative: string) -> bool {
 	if relative == "" || len(relative) > CREDENTIAL_RELATIVE_MAX {
 		return false
 	}
+
 	if !strings.has_prefix(relative, "/") || strings.has_prefix(relative, "//") {
 		return false
 	}
+
 	if strings.contains(relative, "://") || strings.contains_any(relative, "\r\n#\\@?") {
 		return false
 	}
+
 	return true
 }
 
 @(private)
 credential_bounded_valid :: proc(value: AWS_Credentials) -> bool {
-	return len(value.access_key) <= CREDENTIAL_ACCESS_MAX &&
+	return(
+		len(value.access_key) <= CREDENTIAL_ACCESS_MAX &&
 		len(value.secret_key) <= CREDENTIAL_SECRET_MAX &&
 		len(value.session_token) <= CREDENTIAL_TOKEN_MAX &&
-		aws_credentials_valid(value)
+		aws_credentials_valid(value) \
+	)
 }
 
 @(private)
@@ -782,6 +846,7 @@ credential_wipe_text :: proc(value: string) {
 	if len(value) == 0 {
 		return
 	}
+
 	mem.zero_explicit(raw_data(value), len(value))
 }
 
@@ -803,22 +868,29 @@ credential_profile_load :: proc(
 	source := string(data)
 	for raw_line in strings.split_iterator(&source, "\n") {
 		line := strings.trim_space(raw_line)
+
 		if line == "" || line[0] == '#' || line[0] == ';' {
 			continue
 		}
+
 		if line[0] == '[' && line[len(line) - 1] == ']' {
 			section = strings.trim_space(line[1:len(line) - 1])
 			continue
 		}
+
 		if section != profile {
 			continue
 		}
+
 		equal := strings.index_byte(line, '=')
+
 		if equal < 1 {
 			continue
 		}
+
 		key := strings.trim_space(line[:equal])
 		value := strings.trim_space(line[equal + 1:])
+
 		switch key {
 		case "aws_access_key_id":
 			credentials.access_key = value
@@ -861,4 +933,7 @@ HTTP_Execute :: proc(
 	timeout_ms: i64,
 	upload_file: ^os.File,
 	upload_size: i64,
-) -> ([]u8, network_client.Buffered_HTTP_Result)
+) -> (
+	[]u8,
+	network_client.Buffered_HTTP_Result,
+)

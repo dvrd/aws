@@ -7,6 +7,7 @@ import "core:unicode"
 @(private)
 is_alpha :: proc(c: $T) -> bool where T == u8 || T == rune {
 	r := cast(rune)c
+
 	return r >= 0 && r < 128 && unicode.is_alpha(r)
 }
 
@@ -18,6 +19,7 @@ is_lower :: proc(c: $T) -> bool where T == u8 || T == rune {
 @(private)
 is_digit :: proc(c: $T) -> bool where T == u8 || T == rune {
 	r := cast(rune)c
+
 	return r >= 0 && r < 128 && unicode.is_digit(r)
 }
 

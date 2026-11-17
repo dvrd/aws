@@ -17,9 +17,11 @@ S3_Config :: struct {
 	endpoint, ca_file: string, // Optional HTTPS endpoint/private CA for isolated peers.
 	path_style:        bool,
 }
+
 AWS_Credentials :: struct {
 	access_key, secret_key, session_token: string,
 }
+
 S3_Result :: network_client.Buffered_HTTP_Result
 
 load_s3_config :: proc() -> S3_Config {
@@ -30,6 +32,7 @@ load_s3_config :: proc() -> S3_Config {
 	if config.region == "" do config.region = os.get_env("AWS_DEFAULT_REGION", context.allocator)
 	return config
 }
+
 s3_config_error :: proc(config: S3_Config) -> string {
 	if config.bucket == "" do return ""
 	if len(config.bucket) < 3 || len(config.bucket) > 63 || config.region == "" {
@@ -86,6 +89,7 @@ s3_put_at :: proc(
 		http_execute = http_execute,
 	)
 }
+
 // Stream a file with a fixed buffer, avoiding an archive-sized allocation.
 s3_put_file :: proc(
 	config: S3_Config,
@@ -168,6 +172,7 @@ s3_put_file_internal :: proc(
 		http_execute = http_execute,
 	)
 }
+
 s3_delete :: proc(
 	config: S3_Config,
 	credentials: AWS_Credentials,
@@ -193,32 +198,6 @@ s3_delete_at :: proc(
 		"",
 		now,
 		http_execute = http_execute,
-	)
-}
-
-s3_object_request :: proc(
-	config: S3_Config,
-	credentials: AWS_Credentials,
-	method, key: string,
-	body: []byte,
-	content_type: string,
-	file: ^os.File = nil,
-	file_size: i64 = 0,
-	file_digest: string = "",
-	http_execute: HTTP_Execute = network_client.buffered_http_execute,
-) -> S3_Result {
-	return s3_object_request_at(
-		config,
-		credentials,
-		method,
-		key,
-		body,
-		content_type,
-		time.now(),
-		file,
-		file_size,
-		file_digest,
-		http_execute,
 	)
 }
 
@@ -380,6 +359,7 @@ s3_download_url_at :: proc(
 	signature := s3_signature(credentials.secret_key, config.region, stamp, scope, canonical)
 	return fmt.tprintf("%s%s?%s&X-Amz-Signature=%s", origin, path, query, signature), true
 }
+
 s3_location :: proc(config: S3_Config, key: string) -> (origin, host, path: string) {
 	origin = config.endpoint
 	suffix := "amazonaws.com.cn" if strings.has_prefix(config.region, "cn-") else "amazonaws.com"
@@ -393,6 +373,7 @@ s3_location :: proc(config: S3_Config, key: string) -> (origin, host, path: stri
 	if path_style do path = fmt.tprintf("/%s%s", config.bucket, path)
 	return
 }
+
 s3_encode :: proc(text: string, keep_slashes := false) -> string {
 	builder := strings.builder_make(allocator = context.temp_allocator)
 	for ch in transmute([]byte)text {
@@ -414,11 +395,13 @@ s3_encode :: proc(text: string, keep_slashes := false) -> string {
 	}
 	return strings.to_string(builder)
 }
+
 s3_sha256 :: proc(data: []byte) -> string {
 	digest: [32]byte
 	hash.hash(.SHA256, data, digest[:])
 	return string(hex.encode(digest[:], allocator = context.temp_allocator))
 }
+
 s3_signature :: proc(
 	secret, region, stamp, scope, canonical: string,
 	service: string = "s3",
@@ -445,6 +428,7 @@ s3_signature :: proc(
 	hmac.sum(.SHA256, signature[:], transmute([]byte)to_sign, key[:])
 	return string(hex.encode(signature[:], allocator = context.temp_allocator))
 }
+
 s3_timestamp :: proc(now: time.Time) -> string {
 	year, month, day := time.date(now)
 	hour, minute, second := time.clock(now)
@@ -456,10 +440,16 @@ S3_GET_TIMEOUT_MS :: 120000
 S3_GET_HEADERS_MAX :: 8
 
 @(private)
-s3_get_native_config :: proc(timeout_ms: i64, bytes_max: int,
- roots: []^x509.Certificate) -> network_client.Config {
- return {max_body_size = max(bytes_max, 1),
-  timeout = time.Duration(timeout_ms)*time.Millisecond, tls = {root_cas = roots}}
+s3_get_native_config :: proc(
+	timeout_ms: i64,
+	bytes_max: int,
+	roots: []^x509.Certificate,
+) -> network_client.Config {
+	return {
+		max_body_size = max(bytes_max, 1),
+		timeout = time.Duration(timeout_ms) * time.Millisecond,
+		tls = {root_cas = roots},
+	}
 }
 
 S3_Get_Error :: enum u8 {

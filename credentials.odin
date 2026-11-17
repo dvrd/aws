@@ -31,7 +31,9 @@ aws_credentials_with_http :: proc(http_execute: HTTP_Execute) -> (credentials: A
 	}
 
 	profile := os.get_env("AWS_PROFILE", context.temp_allocator)
-	if profile == "" do profile = "default"
+	if profile == "" {
+		profile = "default"
+	}
 	path := os.get_env("AWS_SHARED_CREDENTIALS_FILE", context.temp_allocator)
 
 	if path == "" {
@@ -53,10 +55,14 @@ aws_credentials_with_http :: proc(http_execute: HTTP_Execute) -> (credentials: A
 
 	if relative != "" {
 		// Same acceptance rule as before caching: one slash-prefixed path, no line breaks.
-		if !strings.has_prefix(relative, "/") || strings.contains_any(relative, "\r\n#") do return
+		if !strings.has_prefix(relative, "/") || strings.contains_any(relative, "\r\n#") {
+			return
+		}
 		url = fmt.tprintf("http://169.254.170.2%s", relative)
 	} else {
-		if os.get_env("AWS_EC2_METADATA_DISABLED", context.temp_allocator) == "true" do return
+		if os.get_env("AWS_EC2_METADATA_DISABLED", context.temp_allocator) == "true" {
+			return
+		}
 		reply, result := http_execute(
 			"PUT",
 			"http://169.254.169.254/latest/api/token",
@@ -68,9 +74,13 @@ aws_credentials_with_http :: proc(http_execute: HTTP_Execute) -> (credentials: A
 			nil,
 			0,
 		)
-		if !result.ok do return
+		if !result.ok {
+			return
+		}
 		token = string(reply)
-		if token == "" || strings.contains_any(token, "\r\n") do return
+		if token == "" || strings.contains_any(token, "\r\n") {
+			return
+		}
 		role, role_result := http_execute(
 			"GET",
 			"http://169.254.169.254/latest/meta-data/iam/security-credentials/",
@@ -92,26 +102,36 @@ aws_credentials_with_http :: proc(http_execute: HTTP_Execute) -> (credentials: A
 	}
 
 	headers: []string
-	if token != "" do headers = {fmt.tprintf("X-aws-ec2-metadata-token: %s", token)}
+	if token != "" {
+		headers = {fmt.tprintf("X-aws-ec2-metadata-token: %s", token)}
+	}
 	data, result := http_execute("GET", url, nil, headers, "", true, 1500, nil, 0)
-	if !result.ok do return
+	if !result.ok {
+		return
+	}
 	document: struct {
 		access: string `json:"AccessKeyId"`,
 		secret: string `json:"SecretAccessKey"`,
 		token:  string `json:"Token"`,
 	}
 
-	if json.unmarshal(data, &document, allocator = context.temp_allocator) != nil do return
+	if json.unmarshal(data, &document, allocator = context.temp_allocator) != nil {
+		return
+	}
 	credentials = {document.access, document.secret, document.token}
 
 	return credentials, aws_credentials_valid(credentials)
 }
 
 aws_credentials_valid :: proc(value: AWS_Credentials) -> bool {
-	if value.access_key == "" || value.secret_key == "" do return false
+	if value.access_key == "" || value.secret_key == "" {
+		return false
+	}
 
 	for text in ([]string{value.access_key, value.secret_key, value.session_token}) {
-		if strings.contains_any(text, "\r\n\x00") do return false
+		if strings.contains_any(text, "\r\n\x00") {
+			return false
+		}
 	}
 
 	return true

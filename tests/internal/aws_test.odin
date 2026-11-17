@@ -1,6 +1,5 @@
 package aws
 
-import files "../files"
 import network_client "../surf"
 import "core:fmt"
 import "core:os"
@@ -31,7 +30,7 @@ profile_reading_preserves_sections_and_bounds :: proc(t: ^testing.T) {
 	large := make([]u8, 65537); defer delete(large)
 	testing.expect(t, os.write_entire_file(path, large) == nil)
 	_, limit_error := aws_credentials_read_profile(path, "selected")
-	testing.expect_value(t, limit_error.kind, files.Read_Error_Kind.Limit_Exceeded)
+	testing.expect_value(t, limit_error.kind, Read_Error_Kind.Limit_Exceeded)
 	testing.expect(t, !aws_credentials_valid({"fixture\nkey", "secret", ""}))
 	testing.expect(t, !aws_credentials_valid({"fixture-key", "", ""}))
 }

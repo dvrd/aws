@@ -8,7 +8,7 @@ trap 'rm -rf -- "$work"' EXIT
 trap 'exit 130' INT
 trap 'exit 143' TERM HUP
 mkdir "$work/shared" "$work/consumer"
-for package in aws files surf http ascii websocket async; do
+for package in aws files surf http websocket async; do
     mkdir "$work/shared/$package"
     tar -C "$root/$package" --exclude=.git --exclude=__pycache__ --exclude='*.pyc' -cf - . |
         tar -C "$work/shared/$package" -xf -

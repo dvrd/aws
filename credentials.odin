@@ -41,7 +41,7 @@ aws_credentials_with_http :: proc(
 	if path == "" {
 		path = fmt.tprintf("%s/.aws/credentials", os.get_env("HOME", context.temp_allocator))
 	}
-	file_credentials, file_error := aws_credentials_read_profile(path, profile)
+	file_credentials, _, _, file_error := credential_profile_load(path, profile, false)
 	if file_error.kind != .None && file_error.kind != .Open_Failed {
 		return
 	}
@@ -107,17 +107,6 @@ aws_credentials_with_http :: proc(
 	return credentials, aws_credentials_valid(credentials)
 }
 
-// Profile strings borrow bounded file storage in the operation's scratch arena.
-aws_credentials_read_profile :: proc(
-	path, profile: string,
-) -> (
-	credentials: AWS_Credentials,
-	error: Read_Error,
-) {
-	credentials, _, _, error = credential_profile_load(path, profile, false)
-	return
-}
-
 aws_credentials_valid :: proc(value: AWS_Credentials) -> bool {
 	if value.access_key == "" || value.secret_key == "" do return false
 	for text in ([]string{value.access_key, value.secret_key, value.session_token}) {
@@ -127,10 +116,6 @@ aws_credentials_valid :: proc(value: AWS_Credentials) -> bool {
 }
 
 Credential_Clock :: proc(data: rawptr) -> time.Time
-
-credential_clock_wall :: proc(_: rawptr) -> time.Time {
-	return time.now()
-}
 
 // Enabled sources. Unsupported mechanisms are not members; they return a typed error.
 Credential_Mode :: enum {

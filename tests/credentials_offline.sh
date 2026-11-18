@@ -1,7 +1,8 @@
 #!/bin/bash
 set -euo pipefail
 here=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd -P)
-shared=$(CDPATH='' cd -- "$here/../.." && pwd -P)
+repository=$(CDPATH='' cd -- "$here/.." && pwd -P)
+dependencies=${WEBTOOLS_SHARED:-$HOME/dev/oss/Odin/shared}
 odin=
 only=
 while (($#)); do
@@ -30,6 +31,14 @@ cleanup() {
 trap cleanup EXIT
 trap 'exit 130' INT
 trap 'exit 143' TERM HUP
+# aws from this repository's src/, every other library from the shared collection.
+shared=$work/shared
+mkdir "$shared"
+ln -s "$repository/src" "$shared/aws"
+for dependency in "$dependencies"/*/; do
+    name=$(basename -- "$dependency")
+    [[ "$name" == aws || -e "$shared/$name" ]] || ln -s "$dependency" "$shared/$name"
+done
 "$odin" build "$here/testdata/credentials" "-collection:shared=$shared" -sanitize:address -warnings-as-errors "-out:$work/fixture"
 printf '[default]\naws_access_key_id=fixture-key\naws_secret_access_key=fixture-secret\naws_session_token=fixture-session\n' > "$work/profile"
 printf '[default]\naws_access_key_id=fixture-key\n' > "$work/partial-profile"

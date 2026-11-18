@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
-root=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
+root=$(CDPATH='' cd -- "$(dirname -- "$0")/.." && pwd)
+dependencies=${WEBTOOLS_SHARED:-$HOME/dev/oss/Odin/shared}
 compiler=${ODIN_BIN:-${ODIN:-odin}}
 command -v "$compiler" >/dev/null || { printf '%s\n' 'Set ODIN_BIN to a matching Odin compiler' >&2; exit 2; }
 work=$(mktemp -d "${TMPDIR:-/tmp}/aws-consumer.XXXXXX")
@@ -9,8 +10,10 @@ trap 'exit 130' INT
 trap 'exit 143' TERM HUP
 mkdir "$work/shared" "$work/consumer"
 for package in aws surf http websocket async; do
+    source=$dependencies/$package
+    [[ "$package" != aws ]] || source=$root/src
     mkdir "$work/shared/$package"
-    tar -C "$root/$package" --exclude=.git --exclude=__pycache__ --exclude='*.pyc' -cf - . |
+    tar -C "$source" --exclude=.git --exclude=__pycache__ --exclude='*.pyc' -cf - . |
         tar -C "$work/shared/$package" -xf -
 done
 cat > "$work/consumer/main.odin" <<'ODIN'

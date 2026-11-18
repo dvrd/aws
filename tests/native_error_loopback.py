@@ -133,8 +133,8 @@ def main():
         code,output=capture(command,environment,time.monotonic()+180,1<<20)
         assert code==0,output.decode(errors='replace')[:4000]
         context=ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER);context.minimum_version=ssl.TLSVersion.TLSv1_3
-        context.load_cert_chain(shared/'surf/tests/http3/localhost.pem',shared/'http/v3/testdata/rsa2048.pem')
-        ca=shared/'surf/tests/http3/localhost.pem';wrong=shared/'http/v3/testdata/root.pem'
+        context.load_cert_chain(OWNER/'tests/testdata/tls/localhost.pem',OWNER/'tests/testdata/tls/rsa2048.pem')
+        ca=OWNER/'tests/testdata/tls/localhost.pem';wrong=OWNER/'tests/testdata/tls/root.pem'
         cases=[]
         for method in ('PUT','DELETE'):
             for status in (400,403,503,429,200 if method=='PUT' else 204):

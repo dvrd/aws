@@ -4,7 +4,7 @@ import argparse,hashlib,json,os,selectors,shutil,signal,socket,ssl,subprocess,te
 from pathlib import Path
 
 OWNER=Path(__file__).resolve().parents[1]
-PACKAGES=('aws','files','surf','http','ascii','websocket','async')
+PACKAGES=('aws','surf','http','websocket','async')
 MARKER=b'private-native-loopback-marker'
 KEY='public-fixture-key'
 TOKEN='public-fixture-session'

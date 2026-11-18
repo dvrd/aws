@@ -1,6 +1,6 @@
 package aws
 
-import network_client "../surf"
+import network_client "shared:surf"
 import "core:crypto/hash"
 import "core:crypto/hmac"
 import "core:encoding/hex"

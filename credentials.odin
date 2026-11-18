@@ -1,6 +1,6 @@
 package aws
 
-import network_client "../surf"
+import network_client "shared:surf"
 import "core:encoding/json"
 import "core:fmt"
 import "core:mem"

@@ -53,7 +53,9 @@ observed_error_code :: proc(body: []u8) -> S3_Observed_Code {
 	if !strings.has_prefix(text, "<Error") ||
 	   !strings.has_suffix(text, "</Error>") ||
 	   strings.count(text, "<Error") != 1 ||
-	   strings.contains(text, "<!") {
+	   strings.contains(text, "<!") ||
+	   strings.contains(text, "&") {
+		// The parser decodes references and unwraps CDATA; a code spelled through either is not strict.
 		return .Unknown
 	}
 

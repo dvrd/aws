@@ -197,23 +197,18 @@ s3_object_request_at :: proc(
 	file_digest: string = "",
 	http_execute: HTTP_Execute = http_execute_default,
 ) -> S3_Result {
-	if http_execute == nil ||
-	   !aws_credentials_valid(credentials) ||
-	   s3_config_error(config) != "" ||
-	   config.bucket == "" ||
-	   key == "" ||
-	   strings.contains_any(content_type, "\r\n\x00") {
+	if http_execute == nil {
 		return {}
 	}
-	origin, host, path := s3_location(config, key)
-	stamp := s3_timestamp(now)
-	digest := file_digest if file != nil else s3_sha256(body)
-	headers := s3_object_headers(config, credentials, method, host, path, digest, stamp, content_type)
+	url, headers, signed := s3_object_sign(config, credentials, method, key, body, content_type, now, file_digest)
+	if !signed {
+		return {}
+	}
 	started := time.tick_now()
 	_, result := http_execute(
 		{
 			method = method,
-			url = fmt.tprintf("%s%s", origin, path),
+			url = url,
 			body = body,
 			headers = headers,
 			ca_file = config.ca_file,
@@ -224,6 +219,121 @@ s3_object_request_at :: proc(
 	)
 	s3_observe(started, result.ok)
 	return result
+}
+
+// Validates and signs one object request without sending it. digest is the hex
+// SHA-256 of a payload that is not in body; empty means body is hashed here.
+s3_object_sign :: proc(
+	config: S3_Config,
+	credentials: AWS_Credentials,
+	method, key: string,
+	body: []byte,
+	content_type: string,
+	now: time.Time,
+	digest: string = "",
+) -> (
+	url: string,
+	headers: []string,
+	ok: bool,
+) {
+	if !aws_credentials_valid(credentials) ||
+	   s3_config_error(config) != "" ||
+	   config.bucket == "" ||
+	   key == "" ||
+	   strings.contains_any(content_type, "\r\n\x00") {
+		return
+	}
+	origin, host, path := s3_location(config, key)
+	payload_digest := digest if digest != "" else s3_sha256(body)
+	headers = s3_object_headers(config, credentials, method, host, path, payload_digest, s3_timestamp(now), content_type)
+	return fmt.tprintf("%s%s", origin, path), headers, true
+}
+
+// One signed request for a transport the caller owns, such as an async client.
+// url and headers borrow context.temp_allocator and body borrows the caller's
+// bytes: hand the request to a transport that copies it before either is
+// released. The signature is bound to the signing time, so build a new request
+// for a late retry instead of keeping this one. The caller's transport supplies
+// the timeout and the trust for S3_Config.ca_file, and reports the outcome
+// through s3_observe if the observer should see it.
+S3_Request :: struct {
+	method:  string, // "PUT" or "DELETE"
+	url:     string,
+	headers: []S3_Header,
+	body:    []u8,
+}
+
+// Signs an upload of body without sending it. now is the signing time; the zero
+// time means time.now(). Nothing is returned when the input is invalid.
+s3_put_request :: proc(
+	config: S3_Config,
+	credentials: AWS_Credentials,
+	key: string,
+	body: []byte,
+	content_type: string,
+	now: time.Time = {},
+) -> (
+	S3_Request,
+	bool,
+) {
+	return s3_request(config, credentials, "PUT", key, body, content_type, signing_time(now))
+}
+
+// Signs a delete without sending it; see s3_put_request.
+s3_delete_request :: proc(
+	config: S3_Config,
+	credentials: AWS_Credentials,
+	key: string,
+	now: time.Time = {},
+) -> (
+	S3_Request,
+	bool,
+) {
+	return s3_request(config, credentials, "DELETE", key, nil, "", signing_time(now))
+}
+
+s3_request :: proc(
+	config: S3_Config,
+	credentials: AWS_Credentials,
+	method, key: string,
+	body: []byte,
+	content_type: string,
+	now: time.Time,
+) -> (
+	request: S3_Request,
+	ok: bool,
+) {
+	url, lines := s3_object_sign(config, credentials, method, key, body, content_type, now) or_return
+	fields, allocation_error := make([]S3_Header, len(lines), context.temp_allocator)
+	if allocation_error != nil {
+		return
+	}
+	count := s3_header_fields(lines, fields) or_return
+	return {method = method, url = url, headers = fields[:count], body = body}, true
+}
+
+// Splits "Name: value" lines into fields. A line with an empty value is dropped:
+// "Expect:" only switches off a default of the buffered client.
+s3_header_fields :: proc(lines: []string, fields: []S3_Header) -> (count: int, ok: bool) {
+	for line in lines {
+		colon := strings.index_byte(line, ':')
+		if colon < 1 || strings.contains_any(line, "\r\n\x00") {
+			return 0, false
+		}
+		value := strings.trim_space(line[colon + 1:])
+		if value == "" {
+			continue
+		}
+		if count == len(fields) {
+			return 0, false
+		}
+		fields[count] = {
+			name  = line[:colon],
+			value = value,
+		}
+		count += 1
+	}
+	return count, true
 }
 
 s3_object_headers :: proc(
@@ -498,26 +608,9 @@ s3_get_native :: proc(
 		return nil, 0, .Invalid_Input
 	}
 	fields: [S3_GET_HEADERS_MAX]S3_Header
-	count := 0
-	for line in headers {
-		colon := strings.index_byte(line, ':')
-
-		if colon < 1 || strings.contains_any(line, "\r\n\x00") {
-			return nil, 0, .Invalid_Input
-		}
-
-		value := strings.trim_space(line[colon + 1:])
-		// Empty "Expect:" needs no native header.
-		if value == "" {
-			continue
-		}
-
-		fields[count] = {
-			name  = line[:colon],
-			value = value,
-		}
-
-		count += 1
+	count, fields_ok := s3_header_fields(headers, fields[:])
+	if !fields_ok {
+		return nil, 0, .Invalid_Input
 	}
 	// A nil root slice means omitted trust and fails before dial. This non-nil
 	// empty view explicitly requests platform anchors; Core owns their pool for

@@ -475,6 +475,7 @@ s3_signature :: proc(secret, region, stamp, scope, canonical: string, service: s
 		hash.update(&hasher, transmute([]byte)prefix)
 		hash.update(&hasher, transmute([]byte)secret)
 		hash.final(&hasher, seed[:32])
+		mem.zero_explicit(&hasher, size_of(hasher))
 		seed_size = 32
 	}
 	hmac.sum(.SHA256, key[:], transmute([]byte)stamp[:8], seed[:seed_size])

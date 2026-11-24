@@ -60,6 +60,10 @@ ses_config_valid :: proc(config: SES_Config) -> bool {
 
 // This request owns no persistent data. Caller bounds its temporary allocator.
 // SES has no idempotency token: ambiguous transport failures can duplicate alerts.
+// Blocks the calling thread for up to 15 seconds. now is the signing time; the
+// zero time means time.now(). Rejected is any answer from SES other than 200,
+// throttles and 5xx included: SES acknowledged the request and it is not replayed
+// here. Unavailable means no answer arrived.
 ses_send :: proc(
 	config: SES_Config,
 	credentials: AWS_Credentials,
@@ -88,7 +92,7 @@ ses_send :: proc(
 	}
 	host := fmt.tprintf("email.%s.amazonaws.com", config.region)
 	path := "/v2/email/outbound-emails"
-	headers := ses_headers(config.region, credentials, host, s3_timestamp(now), payload)
+	headers := ses_headers(config.region, credentials, host, s3_timestamp(signing_time(now)), payload)
 	data, result := http_execute(
 		{method = "POST", url = fmt.tprintf("https://%s%s", host, path), body = payload, headers = headers, timeout_ms = 15000},
 	)

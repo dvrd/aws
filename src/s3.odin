@@ -13,9 +13,19 @@ import "core:time"
 import x509 "core:crypto/x509"
 import "core:mem"
 
+// Without an endpoint the request goes to AWS: https://<bucket>.s3.<region>...,
+// or path style (https://s3.<region>.../<bucket>/) when path_style is set or the
+// bucket name contains a dot, which AWS's wildcard certificate cannot cover.
+//
+// endpoint replaces the AWS origin for an isolated peer, a compatible store or the
+// bucket's own domain. It is "https://" and a lower-case host with an optional
+// port other than 443, and is signed and sent exactly as written. The bucket is
+// added to the path only when path_style is set; otherwise the endpoint is taken
+// to be the bucket's own origin, dotted name or not. ca_file is a private CA for
+// that endpoint.
 S3_Config :: struct {
 	bucket, region:    string,
-	endpoint, ca_file: string, // Optional HTTPS endpoint/private CA for isolated peers.
+	endpoint, ca_file: string,
 	path_style:        bool,
 }
 
@@ -81,14 +91,63 @@ s3_config_error :: proc(config: S3_Config) -> string {
 	}
 
 	if config.endpoint != "" {
-		if !strings.has_prefix(config.endpoint, "https://") ||
-		   strings.contains_any(config.endpoint[8:], "/?#@\r\n") ||
-		   len(config.endpoint) <= 8 {
+		if !strings.has_prefix(config.endpoint, "https://") || len(config.endpoint) <= 8 {
+			return "S3 endpoint must be an HTTPS origin"
+		}
+		if !s3_endpoint_authority_valid(config.endpoint[8:]) {
 			return "S3 endpoint must be an HTTPS origin"
 		}
 	}
 
 	return ""
+}
+
+// A host and an optional port, nothing else: no path, query, user or space. The
+// host is lower case and the port is not the default, so that the Host a client
+// sends cannot differ from the one that was signed.
+s3_endpoint_authority_valid :: proc(authority: string) -> bool {
+	host, port := authority, ""
+	if strings.has_prefix(authority, "[") {
+		closing := strings.index_byte(authority, ']')
+		if closing < 2 {
+			return false
+		}
+		for ch in transmute([]byte)authority[1:closing] {
+			if !is_digit(ch) && !(ch >= 'a' && ch <= 'f') && ch != ':' && ch != '.' {
+				return false
+			}
+		}
+		host, port = "", authority[closing + 1:]
+		if port != "" && port[0] != ':' {
+			return false
+		}
+	} else if colon := strings.index_byte(authority, ':'); colon >= 0 {
+		host, port = authority[:colon], authority[colon:]
+	}
+	if !strings.has_prefix(authority, "[") {
+		if host == "" || len(host) > 253 || host[0] == '.' || host[0] == '-' || strings.contains(host, "..") {
+			return false
+		}
+		for ch in transmute([]byte)host {
+			if !is_lower(ch) && !is_digit(ch) && ch != '.' && ch != '-' {
+				return false
+			}
+		}
+	}
+	if port == "" {
+		return true
+	}
+	number := 0
+	if len(port) < 2 || len(port) > 6 || port[1] == '0' {
+		return false
+	}
+	for ch in transmute([]byte)port[1:] {
+		if !is_digit(ch) {
+			return false
+		}
+		number = number * 10 + int(ch - '0')
+	}
+	return number <= 65535 && number != 443
 }
 
 signing_time :: proc(now: time.Time) -> time.Time {
@@ -439,6 +498,8 @@ s3_object_headers :: proc(
 
 // A presigned GET for a browser or another client to fetch directly. No I/O.
 // Returned URL is a bearer credential. Never persist it or include it in logs.
+// It stops working when the credentials that signed it expire, even if
+// expires_seconds has not passed.
 s3_download_url :: proc(
 	config: S3_Config,
 	credentials: AWS_Credentials,
@@ -478,7 +539,8 @@ s3_download_url :: proc(
 s3_location :: proc(config: S3_Config, key: string) -> (origin, host, path: string) {
 	origin = config.endpoint
 	suffix := "amazonaws.com.cn" if strings.has_prefix(config.region, "cn-") else "amazonaws.com"
-	path_style := config.path_style || strings.contains(config.bucket, ".")
+	// A dotted bucket forces path style on AWS only; an endpoint is used as given.
+	path_style := config.path_style || origin == "" && strings.contains(config.bucket, ".")
 
 	if origin == "" {
 		if path_style {
@@ -629,6 +691,11 @@ s3_get :: proc(
 	   bytes_max > S3_GET_BYTES_MAX {
 		return nil, .Invalid_Input
 	}
+	// The native executor trusts the system roots only. A configured private CA
+	// must not be dropped silently in favour of them.
+	if config.ca_file != "" && execute == s3_get_native {
+		return nil, .Invalid_Input
+	}
 	origin, host, path := s3_location(config, key)
 	stamp := s3_timestamp(signing_time(now))
 	headers := s3_object_headers(config, credentials, "GET", host, path, s3_sha256(nil), stamp, "")
@@ -660,7 +727,8 @@ s3_get :: proc(
 }
 
 // Surf executor: native TLS with system roots, no redirects or proxies. A private CA
-// (S3_Config.ca_file) is not supported on this path.
+// (S3_Config.ca_file) is not supported on this path, and s3_get refuses the
+// combination instead of ignoring the CA.
 s3_get_native :: proc(
 	url: string,
 	headers: []string,

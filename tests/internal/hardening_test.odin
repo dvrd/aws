@@ -137,7 +137,16 @@ uncached_resolution_applies_the_metadata_path_rule :: proc(t: ^testing.T) {
 	}
 	credential_test_http_state = &http
 	defer credential_test_http_state = nil
-	for relative in ([]string{"//evil.example/path", "/v2/credentials?x=1", "/v2/@host", "http://evil.example/"}) {
+	for relative in ([]string {
+			"//evil.example/path",
+			"/v2/credentials?x=1",
+			"/v2/@host",
+			"http://evil.example/",
+			"/v2/creden tials",
+			"/v2/creden\ttials",
+			"/v2/creden\x01tials",
+			"/v2/cr\u00e9dentials",
+		}) {
 		testing.expect(t, os.set_env("AWS_CONTAINER_CREDENTIALS_RELATIVE_URI", relative) == nil)
 		_, ok := aws_credentials_with_http(credential_test_http)
 		testing.expect(t, !ok, relative)
@@ -443,4 +452,92 @@ s3_endpoint_is_signed_as_written_and_decides_the_bucket_position :: proc(t: ^tes
 	dotted.path_style = true
 	store, _ := s3_get_request(dotted, credentials, "a.txt")
 	testing.expect_value(t, store.url, "https://store.internal:9000/assets.example.com/a.txt")
+}
+
+@(test)
+metadata_text_is_printable_before_it_reaches_a_url_or_header :: proc(t: ^testing.T) {
+	testing.expect(t, credential_metadata_url_permitted("http://169.254.169.254/latest/meta-data/iam/security-credentials/fixture-role"))
+	testing.expect(t, credential_metadata_url_permitted("http://169.254.170.2/v2/credentials/fixture"))
+	for url in ([]string {
+			"http://169.254.169.254/latest/meta-data/iam/security-credentials/role\tname",
+			"http://169.254.169.254/latest/meta-data/iam/security-credentials/role\x01",
+			"http://169.254.169.254/latest/meta-data/iam/security-credentials/r\u00f4le",
+			"http://169.254.170.2/v2/creden tials",
+			"http://169.254.170.2/v2/\x7f",
+		}) {
+		testing.expectf(t, !credential_metadata_url_permitted(url), "%q", url)
+	}
+
+	saved := credential_test_env_push()
+	defer credential_test_env_pop(saved)
+	directory, directory_error := os.make_directory_temp("", "aws-cache-*", context.allocator)
+	testing.expect(t, directory_error == nil)
+	defer delete(directory)
+	defer os.remove(directory)
+	credential_test_absent(directory)
+	testing.expect(t, os.unset_env("AWS_EC2_METADATA_DISABLED"))
+	// An IMDS token with a control character never becomes a header.
+	bad_token :: proc(request: HTTP_Request) -> ([]u8, network_client.Buffered_HTTP_Result) {
+		ses_hardening.status += 1
+		return transmute([]u8)string("imds\ttoken"), {ok = true, status = 200}
+	}
+	sync.mutex_lock(&ses_hardening_mutex)
+	defer sync.mutex_unlock(&ses_hardening_mutex)
+	ses_hardening = {}
+	_, ok := aws_credentials_with_http(bad_token)
+	testing.expect(t, !ok)
+	testing.expect_value(t, ses_hardening.status, 1)
+	clock := Credential_Test_Clock {
+		now = credential_test_instant("2024-01-01T00:00:00Z"),
+	}
+	cache: Credential_Cache
+	testing.expect_value(t, credential_cache_init(&cache, bad_token, credential_test_clock, &clock).kind, Credential_Error_Kind.None)
+	defer credential_cache_destroy(&cache)
+	testing.expect_value(t, credential_refresh(&cache).kind, Credential_Error_Kind.Unavailable)
+	testing.expect_value(t, ses_hardening.status, 2)
+}
+
+@(test)
+profile_with_a_byte_order_mark_still_has_its_first_section :: proc(t: ^testing.T) {
+	directory, error := os.make_directory_temp("", "aws-profile-*", context.allocator)
+	if !testing.expect(t, error == nil) {
+		return
+	}
+	defer delete(directory)
+	defer os.remove(directory)
+	path := fmt.aprintf("%s/credentials", directory)
+	defer delete(path)
+	defer os.remove(path)
+	testing.expect(t, os.write_entire_file(path, "\xef\xbb\xbf[default]\r\naws_access_key_id = fixture-key\r\naws_secret_access_key = fixture-secret\r\n") == nil)
+	credentials, _, _, read_error := credential_profile_load(path, "default", true)
+	testing.expect_value(t, read_error.kind, Read_Error_Kind.None)
+	testing.expect_value(t, credentials.access_key, "fixture-key")
+	testing.expect_value(t, credentials.secret_key, "fixture-secret")
+}
+
+@(test)
+a_file_upload_without_its_digest_is_not_sent :: proc(t: ^testing.T) {
+	sync.mutex_lock(&aws_test_http_mutex)
+	defer sync.mutex_unlock(&aws_test_http_mutex)
+	context.allocator = context.temp_allocator
+	file, error := os.open("/dev/null")
+	if !testing.expect(t, error == nil) {
+		return
+	}
+	defer os.close(file)
+	s3_sent = {}
+	result := s3_object_request_at(
+		S3_REQUEST_FIXTURE_CONFIG,
+		S3_REQUEST_FIXTURE_CREDENTIALS,
+		"PUT",
+		"key",
+		nil,
+		"",
+		time.unix(1369353600, 0),
+		file,
+		7,
+		http_execute = s3_sent_http,
+	)
+	testing.expect(t, !result.ok)
+	testing.expect_value(t, s3_sent.method, "")
 }

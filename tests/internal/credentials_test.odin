@@ -825,3 +825,70 @@ credential_expired_document_is_not_cached :: proc(t: ^testing.T) {
 	testing.expect_value(t, http.calls, 2)
 	testing.expect(t, http.rejected == "")
 }
+
+@(test)
+credential_refresh_replaces_ahead_of_expiry_and_cached_leases_never_fetch :: proc(t: ^testing.T) {
+	saved := credential_test_env_push()
+	defer credential_test_env_pop(saved)
+	directory, directory_error := os.make_directory_temp("", "aws-cache-*", context.allocator)
+	testing.expect(t, directory_error == nil)
+	defer delete(directory)
+	defer os.remove(directory)
+	credential_test_absent(directory)
+	testing.expect(t, os.set_env("AWS_CONTAINER_CREDENTIALS_RELATIVE_URI", "/v2/credentials/fixture") == nil)
+	expires := credential_test_instant("2024-01-01T00:00:00Z")
+	clock := Credential_Test_Clock {
+		now = time.time_add(expires, -time.Hour),
+	}
+	http := Credential_Test_HTTP {
+		body      = CREDENTIAL_TEST_OLD,
+		next_body = CREDENTIAL_TEST_NEW,
+	}
+	credential_test_http_state = &http
+	defer credential_test_http_state = nil
+	cache: Credential_Cache
+	testing.expect_value(t, credential_test_cache(&cache, &clock).kind, .None)
+	defer credential_cache_destroy(&cache)
+
+	// A cold cache gives a request handler nothing and contacts nobody.
+	_, cold := credential_lease_cached(&cache)
+	testing.expect_value(t, cold.kind, Credential_Error_Kind.Unavailable)
+	testing.expect_value(t, http.calls, 0)
+
+	testing.expect_value(t, credential_refresh(&cache).kind, Credential_Error_Kind.None)
+	testing.expect_value(t, http.calls, 1)
+	first, first_error := credential_lease_cached(&cache)
+	defer credential_lease_release(&cache, &first)
+	testing.expect(t, first_error.kind == .None && first.secret_key == "old-secret")
+
+	// Outside the margin a refresh is a no-op.
+	testing.expect_value(t, credential_refresh(&cache).kind, Credential_Error_Kind.None)
+	testing.expect_value(t, http.calls, 1)
+
+	// Inside the margin, a failing provider leaves the usable credentials in place.
+	clock.now = time.time_add(expires, -time.Minute)
+	http.fail = true
+	testing.expect_value(t, credential_refresh(&cache).kind, Credential_Error_Kind.Unavailable)
+	testing.expect_value(t, http.calls, 2)
+	kept, kept_error := credential_lease_cached(&cache)
+	testing.expect(t, kept_error.kind == .None && kept.secret_key == "old-secret")
+	credential_lease_release(&cache, &kept)
+
+	// The next attempt publishes new credentials before the old ones expire.
+	http.fail = false
+	testing.expect_value(t, credential_refresh(&cache).kind, Credential_Error_Kind.None)
+	testing.expect_value(t, http.calls, 3)
+	second, second_error := credential_lease_cached(&cache)
+	defer credential_lease_release(&cache, &second)
+	testing.expect(t, second_error.kind == .None && second.secret_key == "new-secret")
+	testing.expect(t, first.secret_key == "old-secret", "a held lease keeps its own triple")
+	testing.expect_value(t, http.calls, 3)
+
+	// Past expiry with no refresh, a cached lease reports it and still does no I/O.
+	clock.now = credential_test_instant("2024-06-01T00:00:00Z")
+	_, expired := credential_lease_cached(&cache)
+	testing.expect_value(t, expired.kind, Credential_Error_Kind.Expired)
+	testing.expect_value(t, expired.source, Credential_Source.ECS)
+	testing.expect_value(t, http.calls, 3)
+	testing.expect_value(t, credential_refresh(&cache, -time.Second).kind, Credential_Error_Kind.Invalid_Argument)
+}

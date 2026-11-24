@@ -9,8 +9,28 @@ import "core:strings"
 import "core:sync"
 import "core:time"
 
-// Uncached resolution. Strings borrow context.temp_allocator. No expiry and no cache:
+// Two ways to obtain credentials:
+//
+// aws_credentials is a convenience for scripts and one-shot tools. It resolves on
+// every call, may block for up to three metadata calls of 1500 ms each, and
+// returns the secret in strings that stay in context.temp_allocator, unwiped,
+// until the caller resets it.
+//
+// A server uses a Credential_Cache: credential_cache_init once at startup, then
+// credential_refresh from a maintenance thread or timer, and credential_lease_cached
+// with credential_lease_release around each signing in a request handler. The
+// cache keeps one copy of the secret, wipes it when it is replaced and no lease
+// holds it, and hands out leases without I/O.
+//
+//   credential_lease_cached   request handler: never blocks, never does I/O
+//   credential_refresh        maintenance only: blocks for the provider's calls
+//   credential_lease          startup or a worker: blocks when a refresh is needed
+//   aws_credentials           scripts only
+
+// Uncached resolution for scripts; servers use a Credential_Cache (see above).
+// Strings borrow context.temp_allocator and are not wiped. No expiry and no cache:
 // a later call observes environment changes. Incomplete configured material fails closed.
+// Blocks for up to three metadata calls of 1500 ms each.
 aws_credentials :: proc() -> (credentials: AWS_Credentials, ok: bool) {
 	return aws_credentials_with_http(http_execute_default)
 }
@@ -315,6 +335,119 @@ credential_ec2_probe_permitted :: proc(modes: Credential_Modes) -> bool {
 	return os.get_env("AWS_EC2_METADATA_DISABLED", context.temp_allocator) != "true"
 }
 
+// Credentials that expire within this margin are replaced by credential_refresh.
+CREDENTIAL_REFRESH_MARGIN :: 5 * time.Minute
+
+// A lease from the cache as it is: no resolution, no I/O and no waiting, so a
+// request handler may call it. Without usable cached credentials it returns
+// Expired (the cached ones ran out) or Unavailable (none were ever resolved);
+// credential_refresh, called elsewhere, is what fills the cache.
+credential_lease_cached :: proc(cache: ^Credential_Cache) -> (lease: Credential_Lease, error: Credential_Error) {
+	if cache == nil || cache.execute == nil || cache.clock == nil {
+		return {}, {kind = .Invalid_Argument}
+	}
+	sync.mutex_lock(&cache.mutex)
+	defer sync.mutex_unlock(&cache.mutex)
+	if cache.closed {
+		return {}, {kind = .Closed}
+	}
+	if credential_snapshot_usable(cache.snapshot, cache.clock(cache.clock_data)) {
+		lease = credential_snapshot_borrow(cache.snapshot)
+		cache.live_readers += 1
+		return lease, {}
+	}
+	if cache.snapshot != nil {
+		return {}, {kind = .Expired, source = cache.snapshot.source}
+	}
+	return {}, {kind = .Unavailable}
+}
+
+// Keeps the cache ahead of expiry. When there are no usable credentials, or they
+// expire within margin, it resolves new ones and publishes them; otherwise it
+// returns at once. The credentials being replaced stay valid for the leases that
+// hold them and for credential_lease_cached until the new ones are published, and
+// a failed attempt leaves them in place while they are still usable.
+//
+// Blocks for the provider's calls (up to three of 1500 ms each): call it from a
+// maintenance thread or timer, more often than margin, never from a request
+// handler. Returns Busy when another refresh is already running.
+credential_refresh :: proc(cache: ^Credential_Cache, margin: time.Duration = CREDENTIAL_REFRESH_MARGIN) -> Credential_Error {
+	if cache == nil || cache.execute == nil || cache.clock == nil || margin < 0 {
+		return {kind = .Invalid_Argument}
+	}
+	sync.mutex_lock(&cache.mutex)
+	defer sync.mutex_unlock(&cache.mutex)
+	if cache.closed {
+		return {kind = .Closed}
+	}
+	now := cache.clock(cache.clock_data)
+	if credential_snapshot_usable(cache.snapshot, now) &&
+	   (!cache.snapshot.has_expiry || time.diff(now, cache.snapshot.expires) > margin) {
+		return {}
+	}
+	if cache.refresh_active {
+		return {kind = .Busy}
+	}
+	target := credential_refresh_run(cache)
+	if cache.failed_attempt != target {
+		return {}
+	}
+	if cache.refresh_error.kind == .None {
+		return {kind = .Unavailable}
+	}
+	return cache.refresh_error
+}
+
+// Resolves once and publishes the result. The caller holds the mutex and has seen
+// that no refresh is active; the mutex is released for the provider's calls and
+// held again on return. Returns the attempt number, which equals
+// cache.failed_attempt when the attempt failed.
+credential_refresh_run :: proc(cache: ^Credential_Cache) -> (target: u64) {
+	cache.refresh_active = true
+	cache.refresh_attempt += 1
+	target = cache.refresh_attempt
+	sync.mutex_unlock(&cache.mutex)
+
+	snap, resolve_error := credential_resolve(cache)
+	now := cache.clock(cache.clock_data)
+
+	sync.mutex_lock(&cache.mutex)
+
+	if resolve_error.kind == .None && snap != nil && credential_snapshot_usable(snap, now) && !cache.closed {
+		credential_snapshot_retire(cache, cache.snapshot)
+		cache.snapshot = snap
+		snap = nil
+		cache.failed_attempt = 0
+		cache.refresh_error = {}
+	} else {
+		if resolve_error.kind == .None && snap != nil {
+			resolve_error = {
+				kind   = .Expired,
+				source = snap.source,
+			}
+		}
+
+		credential_snapshot_erase(cache, snap)
+		snap = nil
+		cache.refresh_error = resolve_error
+		cache.failed_attempt = target
+
+		if cache.snapshot != nil && !credential_snapshot_usable(cache.snapshot, now) {
+			stale := cache.snapshot
+			cache.snapshot = nil
+			credential_snapshot_retire(cache, stale)
+		}
+	}
+
+	cache.refresh_active = false
+	sync.cond_broadcast(&cache.cond)
+	return target
+}
+
+// A lease, resolving credentials on this thread when the cache has none that are
+// usable: it can block for the provider's calls, or behind another caller's
+// refresh. For startup and worker threads. A request handler uses
+// credential_lease_cached.
 credential_lease :: proc(
 	cache: ^Credential_Cache,
 	cancel: ^Credential_Cancel = nil,
@@ -385,44 +518,7 @@ credential_lease :: proc(
 			continue
 		}
 
-		cache.refresh_active = true
-		cache.refresh_attempt += 1
-		target := cache.refresh_attempt
-		sync.mutex_unlock(&cache.mutex)
-
-		snap, resolve_error := credential_resolve(cache)
-		now = cache.clock(cache.clock_data)
-
-		sync.mutex_lock(&cache.mutex)
-
-		if resolve_error.kind == .None && snap != nil && credential_snapshot_usable(snap, now) && !cache.closed {
-			credential_snapshot_retire(cache, cache.snapshot)
-			cache.snapshot = snap
-			snap = nil
-			cache.failed_attempt = 0
-			cache.refresh_error = {}
-		} else {
-			if resolve_error.kind == .None && snap != nil {
-				resolve_error = {
-					kind   = .Expired,
-					source = snap.source,
-				}
-			}
-
-			credential_snapshot_erase(cache, snap)
-			snap = nil
-			cache.refresh_error = resolve_error
-			cache.failed_attempt = target
-
-			if cache.snapshot != nil && !credential_snapshot_usable(cache.snapshot, now) {
-				stale := cache.snapshot
-				cache.snapshot = nil
-				credential_snapshot_retire(cache, stale)
-			}
-		}
-
-		cache.refresh_active = false
-		sync.cond_broadcast(&cache.cond)
+		credential_refresh_run(cache)
 
 		if credential_cancelled(cancel) {
 			sync.mutex_unlock(&cache.mutex)

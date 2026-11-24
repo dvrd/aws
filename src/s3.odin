@@ -103,6 +103,13 @@ region_char_valid :: proc(ch: rune) -> bool {
 	return is_lower(ch) || is_digit(ch) || ch == '-'
 }
 
+// Keys are sent as given: "../" and other path segments reach S3 literally.
+// Validating a key that comes from outside is the caller's job, and s3_key_strict
+// is a check a caller can opt into.
+
+// Blocks the calling thread until S3 answers or 15 seconds pass. Not for an
+// event-loop thread: build the request with s3_put_request and send it through
+// the server's own transport instead.
 // now is the signing time; the zero time means time.now().
 s3_put :: proc(
 	config: S3_Config,
@@ -126,6 +133,9 @@ s3_put :: proc(
 }
 
 // Stream a file with a fixed buffer, avoiding an archive-sized allocation.
+// Blocks the calling thread while it hashes the file and then for up to 120
+// seconds of upload. Not for an event-loop thread, and it has no request builder:
+// run it on a worker.
 s3_put_file :: proc(
 	config: S3_Config,
 	credentials: AWS_Credentials,
@@ -175,6 +185,8 @@ s3_put_file :: proc(
 	)
 }
 
+// Blocks the calling thread until S3 answers or 15 seconds pass. Not for an
+// event-loop thread: use s3_delete_request there.
 s3_delete :: proc(
 	config: S3_Config,
 	credentials: AWS_Credentials,
@@ -250,6 +262,10 @@ s3_object_sign :: proc(
 }
 
 // One signed request for a transport the caller owns, such as an async client.
+// Building one does no I/O. headers holds only what was signed plus Authorization:
+// no Host, Content-Length, Expect or anything else an HTTP client sets itself, so
+// the client must send Host exactly as it appears in url.
+//
 // url and headers borrow context.temp_allocator and body borrows the caller's
 // bytes: hand the request to a transport that copies it before either is
 // released. The signature is bound to the signing time, so build a new request
@@ -257,7 +273,7 @@ s3_object_sign :: proc(
 // the timeout and the trust for S3_Config.ca_file, and reports the outcome
 // through s3_observe if the observer should see it.
 S3_Request :: struct {
-	method:  string, // "PUT" or "DELETE"
+	method:  string, // "GET", "HEAD", "PUT" or "DELETE"
 	url:     string,
 	headers: []S3_Header,
 	body:    []u8,
@@ -290,6 +306,58 @@ s3_delete_request :: proc(
 	bool,
 ) {
 	return s3_request(config, credentials, "DELETE", key, nil, "", signing_time(now))
+}
+
+// Signs a download without sending it; see s3_put_request. The transport bounds
+// the response body: s3_get's bytes_max does not apply here.
+s3_get_request :: proc(
+	config: S3_Config,
+	credentials: AWS_Credentials,
+	key: string,
+	now: time.Time = {},
+) -> (
+	S3_Request,
+	bool,
+) {
+	return s3_request(config, credentials, "GET", key, nil, "", signing_time(now))
+}
+
+// Signs a metadata request (size, type, existence) without sending it; see
+// s3_put_request. A HEAD answer has no body, so a failure carries no S3 error code.
+s3_head_request :: proc(
+	config: S3_Config,
+	credentials: AWS_Credentials,
+	key: string,
+	now: time.Time = {},
+) -> (
+	S3_Request,
+	bool,
+) {
+	return s3_request(config, credentials, "HEAD", key, nil, "", signing_time(now))
+}
+
+S3_KEY_BYTES_MAX :: 1024 // S3's own limit on a key
+
+// A strict check for keys built from outside input, for callers that opt in: no
+// empty key, nothing above S3's 1024 bytes, no control characters, and no empty,
+// "." or ".." segment (so no leading, trailing or doubled slash). The request
+// procs do not apply it, because S3 itself accepts such keys.
+s3_key_strict :: proc(key: string) -> bool {
+	if key == "" || len(key) > S3_KEY_BYTES_MAX {
+		return false
+	}
+	for index in 0 ..< len(key) {
+		if key[index] < 0x20 || key[index] == 0x7f {
+			return false
+		}
+	}
+	rest := key
+	for segment in strings.split_iterator(&rest, "/") {
+		if segment == "" || segment == "." || segment == ".." {
+			return false
+		}
+	}
+	return key[len(key) - 1] != '/'
 }
 
 s3_request :: proc(
@@ -369,6 +437,7 @@ s3_object_headers :: proc(
 	return headers[:]
 }
 
+// A presigned GET for a browser or another client to fetch directly. No I/O.
 // Returned URL is a bearer credential. Never persist it or include it in logs.
 s3_download_url :: proc(
 	config: S3_Config,
@@ -537,6 +606,8 @@ S3_Get_Execute :: proc(
 
 // Download one object, bounded by bytes_max (<= S3_GET_BYTES_MAX). The body uses
 // allocator and belongs to the caller; nothing is returned on error.
+// Blocks the calling thread for up to 120 seconds. Not for an event-loop thread:
+// use s3_get_request there.
 s3_get :: proc(
 	config: S3_Config,
 	credentials: AWS_Credentials,

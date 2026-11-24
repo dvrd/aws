@@ -1089,16 +1089,20 @@ credential_profile_load :: proc(
 			continue
 		}
 
-		if line[0] == '[' && line[len(line) - 1] == ']' {
-			section = strings.trim_space(line[1:len(line) - 1])
-			continue
+		// A header may be followed by a comment: "[default] # note".
+		if line[0] == '[' {
+			if closing := strings.last_index_byte(line, ']'); closing > 0 {
+				section = strings.trim_space(line[1:closing])
+				continue
+			}
 		}
 
 		if section != profile {
 			continue
 		}
 
-		equal := strings.index_byte(line, '=')
+		// "name = value" or "name: value", whichever delimiter comes first.
+		equal := strings.index_any(line, "=:")
 
 		if equal < 1 {
 			continue

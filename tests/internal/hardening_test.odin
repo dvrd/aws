@@ -541,3 +541,41 @@ a_file_upload_without_its_digest_is_not_sent :: proc(t: ^testing.T) {
 	testing.expect(t, !result.ok)
 	testing.expect_value(t, s3_sent.method, "")
 }
+
+@(test)
+profile_files_are_read_the_way_the_aws_cli_reads_them :: proc(t: ^testing.T) {
+	directory, error := os.make_directory_temp("", "aws-profile-*", context.allocator)
+	if !testing.expect(t, error == nil) {
+		return
+	}
+	defer delete(directory)
+	defer os.remove(directory)
+	path := fmt.aprintf("%s/credentials", directory)
+	defer delete(path)
+	defer os.remove(path)
+	// Each of these gives botocore 2.34.40 the access key "k1" and the secret "s1".
+	accepted := []string {
+		"[default]\naws_access_key_id = k1\naws_secret_access_key = s1\n",
+		"[default]\naws_access_key_id: k1\naws_secret_access_key: s1\n",
+		"[default]\naws_access_key_id=k1\naws_secret_access_key=s1\n",
+		"[default]\r\naws_access_key_id = k1\r\naws_secret_access_key = s1\r\n",
+		"[default]\nAWS_ACCESS_KEY_ID = k1\nAWS_SECRET_ACCESS_KEY = s1\n",
+		"[default]\naws_access_key_id = k1\naws_secret_access_key = s1",
+		"[default]\n  aws_access_key_id = k1\naws_secret_access_key = s1\n",
+		"[default]\naws_access_key_id\t=\tk1\naws_secret_access_key\t=\ts1\n",
+		"# c\n; c\n[default]\n# c\naws_access_key_id = k1\n; c\naws_secret_access_key = s1\n",
+		"[other]\naws_access_key_id = o\naws_secret_access_key = os\n[default]\naws_access_key_id = k1\naws_secret_access_key = s1\n",
+		"[default] # c\naws_access_key_id = k1\naws_secret_access_key = s1\n",
+	}
+	for text in accepted {
+		testing.expect(t, os.write_entire_file(path, text) == nil)
+		credentials, _, _, read_error := credential_profile_load(path, "default", true)
+		testing.expect_value(t, read_error.kind, Read_Error_Kind.None)
+		testing.expectf(t, credentials.access_key == "k1" && credentials.secret_key == "s1", "%q gave %q %q", text, credentials.access_key, credentials.secret_key)
+	}
+	// Delimiters inside a value belong to the value.
+	testing.expect(t, os.write_entire_file(path, "[default]\naws_access_key_id = k1\naws_secret_access_key = s1==\naws_session_token = t=1:2\n") == nil)
+	credentials, _, _, _ := credential_profile_load(path, "default", true)
+	testing.expect_value(t, credentials.secret_key, "s1==")
+	testing.expect_value(t, credentials.session_token, "t=1:2")
+}

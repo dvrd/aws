@@ -268,7 +268,8 @@ s3_object_request_at :: proc(
 	file_digest: string = "",
 	http_execute: HTTP_Execute = http_execute_default,
 ) -> S3_Result {
-	if http_execute == nil {
+	// A file is signed by the digest of its contents, never as an empty payload.
+	if http_execute == nil || file != nil && file_digest == "" {
 		return {}
 	}
 	url, headers, signed := s3_object_sign(config, credentials, method, key, body, content_type, now, file_digest)

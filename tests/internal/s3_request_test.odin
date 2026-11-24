@@ -143,12 +143,11 @@ s3_request_signature :: proc(authorization: string) -> string {
 	return authorization[at + len(marker):]
 }
 
-// What a blocking call handed to its executor. Written under s3_sent_mutex.
+// What a blocking call handed to its executor. Written under aws_test_http_mutex.
 S3_Sent :: struct {
 	method, url, authorization: string,
 }
 s3_sent: S3_Sent
-s3_sent_mutex: sync.Mutex
 
 s3_sent_record :: proc(method, url: string, headers: []string) {
 	s3_sent = {
@@ -174,8 +173,9 @@ s3_sent_get :: proc(url: string, headers: []string, timeout_ms: i64, bytes_max: 
 
 @(test)
 s3_request_builders_sign_exactly_what_the_blocking_calls_send :: proc(t: ^testing.T) {
-	sync.mutex_lock(&s3_sent_mutex)
-	defer sync.mutex_unlock(&s3_sent_mutex)
+	// The blocking calls report to the process-wide observer, which other tests count.
+	sync.mutex_lock(&aws_test_http_mutex)
+	defer sync.mutex_unlock(&aws_test_http_mutex)
 	context.allocator = context.temp_allocator
 	now := time.unix(1369353600, 0)
 	credentials := S3_REQUEST_FIXTURE_CREDENTIALS

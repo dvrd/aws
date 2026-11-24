@@ -1,0 +1,130 @@
+version: '3'
+
+silent: true
+
+# Every task is a command of cmd/tasks, an Odin program built to build/tasks.
+# ODIN selects the compiler; WEBTOOLS_SHARED selects the shared collection that
+# provides the dependencies (default ~/dev/oss/Odin/shared).
+
+tasks:
+  check:
+    desc: Type-check the library and run every offline test
+    aliases: [default]
+    deps: [tasks]
+    cmds:
+      - task: test:tasks
+      - build/tasks check
+
+  build:
+    desc: Type-check the library with vet and warnings as errors
+    deps: [tasks]
+    cmds:
+      - build/tasks build {{.CLI_ARGS}}
+
+  test:
+    desc: Stage the checkout and run the Odin test suites
+    summary: |
+      task test
+      task test -- --package . --internal-only
+      task test -- --package live_qualification/runner
+      task test -- -- -define:ODIN_TEST_NAMES=aws.sigv4_matches_independent_fixture
+    deps: [tasks]
+    cmds:
+      - build/tasks test {{.CLI_ARGS}}
+
+  test:tasks:
+    desc: Run the unit tests of the task runner itself
+    cmds:
+      - mkdir -p build
+      - '"${ODIN:-odin}" test cmd/tasks -vet -warnings-as-errors -out:build/tasks-tests'
+
+  test:signatures:
+    desc: Recalculate the SigV4 fixtures with OpenSSL
+    deps: [tasks]
+    cmds:
+      - build/tasks signatures
+
+  test:consumer:
+    desc: Build and run a consumer that vendors the library
+    deps: [tasks]
+    cmds:
+      - build/tasks consumer
+
+  test:credentials:
+    desc: Run the credential resolver fixtures under the address sanitizer
+    summary: |
+      task test:credentials
+      task test:credentials -- --only imds
+    deps: [tasks]
+    cmds:
+      - build/tasks credentials {{.CLI_ARGS}}
+
+  test:loopback:
+    desc: Observe the native S3 GET against an owned TLS loopback peer
+    summary: |
+      task test:loopback
+      task test:loopback -- --mode observer --report observer.json
+    deps: [tasks]
+    cmds:
+      - build/tasks loopback {{.CLI_ARGS}}
+
+  test:native-errors:
+    desc: Check S3 error handling against an owned TLS peer
+    summary: |
+      task test:native-errors
+      task test:native-errors -- --report native-errors.json
+    deps: [tasks]
+    cmds:
+      - build/tasks native-errors {{.CLI_ARGS}}
+
+  qualify:
+    desc: Run the live qualification runner (plan, run, reconcile, cleanup, send, status)
+    summary: |
+      The only task that can reach AWS, and only with --live. Its unit tests are
+      offline and run with "task test".
+
+        task qualify -- status --state-dir <dir>
+    deps: [qualify:build]
+    cmds:
+      - build/qualify {{.CLI_ARGS}}
+
+  qualify:build:
+    internal: true
+    sources:
+      - tests/live_qualification/runner/*.odin
+    generates:
+      - build/qualify
+    cmds:
+      - mkdir -p build
+      - '"${ODIN:-odin}" build tests/live_qualification/runner -vet -warnings-as-errors -out:build/qualify'
+
+  version:
+    desc: Show the last released version and the one the next release would get
+    deps: [tasks]
+    cmds:
+      - build/tasks version
+
+  release:
+    desc: Check, then tag HEAD with the next semantic version
+    summary: |
+      The version follows from the commit subjects since the last vX.Y.Z tag:
+
+        type!: or a "BREAKING CHANGE:" footer   major
+        feat: or feat(scope):                   minor
+        anything else                           patch
+
+      The tag is annotated with those subjects. Consumers pin it with
+      "krs update aws@<tag>". Releases are cut from a clean main only.
+    deps: [tasks]
+    cmds:
+      - build/tasks release
+
+  tasks:
+    desc: Build the task runner
+    sources:
+      - cmd/tasks/*.odin
+    generates:
+      - build/tasks
+    cmds:
+      - mkdir -p build
+      - '"${ODIN:-odin}" build cmd/tasks -vet -warnings-as-errors -out:build/tasks'

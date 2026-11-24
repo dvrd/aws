@@ -1,4 +1,6 @@
 # Generated build output
+build/
+.task/
 *.o
 *.obj
 *.exe
@@ -9,8 +11,6 @@
 *.so.*
 *.dSYM/
 .DS_Store
-__pycache__/
-*.py[cod]
 node_modules/
 
 # Local credentials and runtime state

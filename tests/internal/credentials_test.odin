@@ -15,6 +15,7 @@ CREDENTIAL_TEST_KEYS :: [?]string {
 	"AWS_ACCESS_KEY_ID",
 	"AWS_SECRET_ACCESS_KEY",
 	"AWS_SESSION_TOKEN",
+	"AWS_CREDENTIAL_EXPIRATION",
 	"AWS_PROFILE",
 	"AWS_SHARED_CREDENTIALS_FILE",
 	"AWS_CONTAINER_CREDENTIALS_RELATIVE_URI",
@@ -299,7 +300,8 @@ credential_expiry_uses_injected_clock_and_keeps_one_snapshot :: proc(t: ^testing
 	testing.expect(t, os.unset_env("AWS_EC2_METADATA_DISABLED"))
 	expires := credential_test_instant("2024-01-01T00:00:00Z")
 	clock := Credential_Test_Clock {
-		now = time.unix(0, time.time_to_unix_nano(expires) - 1),
+		// One nanosecond before the cache stops handing these credentials out.
+		now = time.time_add(expires, -CREDENTIAL_EXPIRY_SKEW - 1),
 	}
 
 	http := Credential_Test_HTTP {
@@ -322,7 +324,7 @@ credential_expiry_uses_injected_clock_and_keeps_one_snapshot :: proc(t: ^testing
 	testing.expect(t, second_error.kind == .None && second.secret_key == "old-secret")
 	credential_lease_release(&cache, &second)
 	testing.expect_value(t, http.calls, 1)
-	clock.now = expires
+	clock.now = time.time_add(expires, -CREDENTIAL_EXPIRY_SKEW)
 	third, third_error := credential_lease(&cache)
 	defer credential_lease_release(&cache, &third)
 	testing.expect_value(t, third_error.kind, .None)
@@ -351,7 +353,8 @@ credential_failed_refresh_does_not_publish_or_return_secrets :: proc(t: ^testing
 	testing.expect(t, os.set_env("AWS_CONTAINER_CREDENTIALS_RELATIVE_URI", "/v2/credentials/fixture") == nil)
 	expires := credential_test_instant("2024-01-01T00:00:00Z")
 	clock := Credential_Test_Clock {
-		now = time.unix(0, time.time_to_unix_nano(expires) - 1),
+		// One nanosecond before the cache stops handing these credentials out.
+		now = time.time_add(expires, -CREDENTIAL_EXPIRY_SKEW - 1),
 	}
 
 	probe := Credential_Probe {
@@ -373,7 +376,7 @@ credential_failed_refresh_does_not_publish_or_return_secrets :: proc(t: ^testing
 	)
 	held, held_error := credential_lease(&cache)
 	testing.expect(t, held_error.kind == .None && held.secret_key == "old-secret")
-	clock.now = expires
+	clock.now = time.time_add(expires, -CREDENTIAL_EXPIRY_SKEW)
 	failed, failed_error := credential_lease(&cache)
 	testing.expect_value(t, failed_error.kind, .Unavailable)
 	testing.expect_value(t, failed_error.source, .ECS)
@@ -733,7 +736,7 @@ credential_metadata_probe_is_explicit :: proc(t: ^testing.T) {
 	defer os.remove(directory)
 	credential_test_absent(directory)
 	clock := Credential_Test_Clock {
-		now = time.unix(0, time.time_to_unix_nano(credential_test_instant("2024-01-01T00:00:00Z")) - 1),
+		now = time.time_add(credential_test_instant("2024-01-01T00:00:00Z"), -CREDENTIAL_EXPIRY_SKEW - 1),
 	}
 
 	http := Credential_Test_HTTP {

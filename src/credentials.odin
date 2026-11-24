@@ -74,8 +74,8 @@ aws_credentials_with_http :: proc(http_execute: HTTP_Execute) -> (credentials: A
 	url, token := "", ""
 
 	if relative != "" {
-		// Same acceptance rule as before caching: one slash-prefixed path, no line breaks.
-		if !strings.has_prefix(relative, "/") || strings.contains_any(relative, "\r\n#") {
+		// The same rule the cache applies: one path on the fixed link-local host.
+		if !credential_relative_uri_ok(relative) {
 			return
 		}
 		url = fmt.tprintf("http://169.254.170.2%s", relative)
@@ -144,9 +144,12 @@ aws_credentials_valid :: proc(value: AWS_Credentials) -> bool {
 		return false
 	}
 
+	// The key and the token are sent as header values, so no control character.
 	for text in ([]string{value.access_key, value.secret_key, value.session_token}) {
-		if strings.contains_any(text, "\r\n\x00") {
-			return false
+		for index in 0 ..< len(text) {
+			if text[index] < 0x20 || text[index] == 0x7f {
+				return false
+			}
 		}
 	}
 
@@ -207,6 +210,7 @@ Credential_Snapshot :: struct {
 	source:        Credential_Source,
 	has_expiry:    bool,
 	expires:       time.Time,
+	resolved:      time.Time, // when the cache published it
 	access_key:    string,
 	secret_key:    string,
 	session_token: string,
@@ -338,6 +342,15 @@ credential_ec2_probe_permitted :: proc(modes: Credential_Modes) -> bool {
 // Credentials that expire within this margin are replaced by credential_refresh.
 CREDENTIAL_REFRESH_MARGIN :: 5 * time.Minute
 
+// Credentials stop being handed out this long before they expire, so a request
+// signed with a fresh lease is not refused for arriving after the expiry.
+CREDENTIAL_EXPIRY_SKEW :: 15 * time.Second
+
+// Credentials with no expiry (a profile, or an environment without
+// AWS_CREDENTIAL_EXPIRATION) are read again by credential_refresh once they are
+// this old, so a rotated file is noticed without a restart.
+CREDENTIAL_STATIC_REFRESH :: 15 * time.Minute
+
 // A lease from the cache as it is: no resolution, no I/O and no waiting, so a
 // request handler may call it. Without usable cached credentials it returns
 // Expired (the cached ones ran out) or Unavailable (none were ever resolved);
@@ -362,11 +375,12 @@ credential_lease_cached :: proc(cache: ^Credential_Cache) -> (lease: Credential_
 	return {}, {kind = .Unavailable}
 }
 
-// Keeps the cache ahead of expiry. When there are no usable credentials, or they
-// expire within margin, it resolves new ones and publishes them; otherwise it
-// returns at once. The credentials being replaced stay valid for the leases that
-// hold them and for credential_lease_cached until the new ones are published, and
-// a failed attempt leaves them in place while they are still usable.
+// Keeps the cache ahead of expiry. When there are no usable credentials, they
+// expire within margin, or they have no expiry and are CREDENTIAL_STATIC_REFRESH
+// old, it resolves new ones and publishes them; otherwise it returns at once.
+// The credentials being replaced stay valid for the leases that hold them and for
+// credential_lease_cached until the new ones are published, and a failed attempt
+// leaves them in place while they are still usable.
 //
 // Blocks for the provider's calls (up to three of 1500 ms each): call it from a
 // maintenance thread or timer, more often than margin, never from a request
@@ -381,9 +395,14 @@ credential_refresh :: proc(cache: ^Credential_Cache, margin: time.Duration = CRE
 		return {kind = .Closed}
 	}
 	now := cache.clock(cache.clock_data)
-	if credential_snapshot_usable(cache.snapshot, now) &&
-	   (!cache.snapshot.has_expiry || time.diff(now, cache.snapshot.expires) > margin) {
-		return {}
+	if credential_snapshot_usable(cache.snapshot, now) {
+		snap := cache.snapshot
+		if snap.has_expiry && time.diff(now, snap.expires) > margin + CREDENTIAL_EXPIRY_SKEW {
+			return {}
+		}
+		if !snap.has_expiry && time.diff(snap.resolved, now) < CREDENTIAL_STATIC_REFRESH {
+			return {}
+		}
 	}
 	if cache.refresh_active {
 		return {kind = .Busy}
@@ -414,6 +433,7 @@ credential_refresh_run :: proc(cache: ^Credential_Cache) -> (target: u64) {
 	sync.mutex_lock(&cache.mutex)
 
 	if resolve_error.kind == .None && snap != nil && credential_snapshot_usable(snap, now) && !cache.closed {
+		snap.resolved = now
 		credential_snapshot_retire(cache, cache.snapshot)
 		cache.snapshot = snap
 		snap = nil
@@ -592,7 +612,7 @@ credential_snapshot_usable :: proc(snap: ^Credential_Snapshot, now: time.Time) -
 		return true
 	}
 
-	return time.diff(now, snap.expires) > 0
+	return time.diff(now, snap.expires) > CREDENTIAL_EXPIRY_SKEW
 }
 
 credential_snapshot_borrow :: proc(snap: ^Credential_Snapshot) -> Credential_Lease {
@@ -694,8 +714,23 @@ credential_resolve :: proc(cache: ^Credential_Cache) -> (snap: ^Credential_Snaps
 				return nil, {kind = .Incomplete, source = .Environment}
 			}
 
+			// AWS_CREDENTIAL_EXPIRATION, as exported with temporary credentials, bounds
+			// them here too. Without it they are static.
+			expiration := credential_env("AWS_CREDENTIAL_EXPIRATION")
+			expires: time.Time
+			if expiration != "" {
+				parsed: bool
+				expires, parsed = credential_instant_parse(expiration)
+				if !parsed {
+					return nil, {kind = .Incomplete, source = .Environment}
+				}
+				if time.diff(cache.clock(cache.clock_data), expires) <= CREDENTIAL_EXPIRY_SKEW {
+					return nil, {kind = .Expired, source = .Environment}
+				}
+			}
+
 			// The snapshot copies the triple before the deferred wipes run.
-			return credential_snapshot_new(cache.allocator, .Environment, access, secret, token, {}, false)
+			return credential_snapshot_new(cache.allocator, .Environment, access, secret, token, expires, expiration != "")
 		}
 	}
 
@@ -784,12 +819,14 @@ credential_fetch_ec2 :: proc(cache: ^Credential_Cache) -> (snap: ^Credential_Sna
 		{"X-aws-ec2-metadata-token-ttl-seconds: 60"},
 	)
 	token := string(reply)
+	defer credential_reply_wipe(cache.execute, reply)
 
 	if !ok || token == "" || len(token) > CREDENTIAL_IMDS_TOKEN_MAX || strings.contains_any(token, "\r\n") {
 		return nil, {kind = .Unavailable, source = .EC2}
 	}
 
 	token_header := fmt.tprintf("X-aws-ec2-metadata-token: %s", token)
+	defer credential_wipe_text(token_header)
 	role, role_ok := credential_metadata_call(
 		cache.execute,
 		"GET",
@@ -825,6 +862,8 @@ credential_fetch_document :: proc(
 		return nil, {kind = .Unavailable, source = source}
 	}
 	data, ok := credential_metadata_call(cache.execute, "GET", url, headers)
+	// The reply is the document that carries the secret, not only its decoded copy.
+	defer credential_reply_wipe(cache.execute, data)
 	document: struct {
 		code:       string `json:"Code"`,
 		access:     string `json:"AccessKeyId"`,
@@ -850,12 +889,12 @@ credential_fetch_document :: proc(
 	if !credential_bounded_valid({document.access, document.secret, document.token}) {
 		return nil, {kind = .Unavailable, source = source}
 	}
-	expires, consumed := time.rfc3339_to_time_utc(document.expiration)
-	if document.expiration == "" || consumed != len(document.expiration) {
+	expires, expires_ok := credential_instant_parse(document.expiration)
+	if !expires_ok {
 		return nil, {kind = .Unavailable, source = source}
 	}
 	now := cache.clock(cache.clock_data)
-	if time.diff(now, expires) <= 0 {
+	if time.diff(now, expires) <= CREDENTIAL_EXPIRY_SKEW {
 		return nil, {kind = .Expired, source = source}
 	}
 	return credential_snapshot_new(
@@ -935,6 +974,69 @@ credential_bounded_valid :: proc(value: AWS_Credentials) -> bool {
 	)
 }
 
+// Erases a metadata reply. Only the default executor's replies are known to be
+// writable memory of the temporary allocator; an injected executor may return
+// memory this package must not write to, and owns the lifetime of its replies.
+credential_reply_wipe :: proc(execute: HTTP_Execute, reply: []byte) {
+	if execute == http_execute_default && len(reply) > 0 {
+		mem.zero_explicit(raw_data(reply), len(reply))
+	}
+}
+
+// An expiry instant with an explicit zone:
+// YYYY-MM-DDTHH:MM:SS[.fraction](Z|+HH:MM|-HH:MM). The fraction is dropped, which
+// can only make credentials look as if they expire earlier. core:time's RFC 3339
+// parser is not used: it stops inside a fraction longer than two digits.
+credential_instant_parse :: proc(text: string) -> (instant: time.Time, ok: bool) {
+	number :: proc(text: string) -> (value: int, ok: bool) {
+		for index in 0 ..< len(text) {
+			if text[index] < '0' || text[index] > '9' {
+				return 0, false
+			}
+			value = value * 10 + int(text[index] - '0')
+		}
+		return value, len(text) > 0
+	}
+	if len(text) < 20 || len(text) > 64 || text[4] != '-' || text[7] != '-' || text[10] != 'T' || text[13] != ':' || text[16] != ':' {
+		return {}, false
+	}
+	year := number(text[0:4]) or_return
+	month := number(text[5:7]) or_return
+	day := number(text[8:10]) or_return
+	hour := number(text[11:13]) or_return
+	minute := number(text[14:16]) or_return
+	second := number(text[17:19]) or_return
+	rest := text[19:]
+	if rest[0] == '.' {
+		digits := 1
+		for digits < len(rest) && rest[digits] >= '0' && rest[digits] <= '9' {
+			digits += 1
+		}
+		if digits == 1 {
+			return {}, false
+		}
+		rest = rest[digits:]
+	}
+	offset: time.Duration
+	switch {
+	case rest == "Z":
+	case len(rest) == 6 && (rest[0] == '+' || rest[0] == '-') && rest[3] == ':':
+		hours := number(rest[1:3]) or_return
+		minutes := number(rest[4:6]) or_return
+		if hours > 23 || minutes > 59 {
+			return {}, false
+		}
+		offset = time.Duration(hours) * time.Hour + time.Duration(minutes) * time.Minute
+		if rest[0] == '-' {
+			offset = -offset
+		}
+	case:
+		return {}, false
+	}
+	instant = time.datetime_to_time(year, month, day, hour, minute, second) or_return
+	return time.time_add(instant, -offset), true
+}
+
 credential_env :: proc(key: string) -> string {
 	return os.get_env(key, context.temp_allocator)
 }
@@ -987,29 +1089,34 @@ credential_profile_load :: proc(
 		key := strings.trim_space(line[:equal])
 		value := strings.trim_space(line[equal + 1:])
 
-		switch key {
-		case "aws_access_key_id":
+		// Option names are case-insensitive, as in the AWS CLI.
+		is_one_of :: proc(key: string, names: ..string) -> bool {
+			for name in names {
+				if strings.equal_fold(key, name) {
+					return true
+				}
+			}
+			return false
+		}
+		found: Credential_Unsupported
+		switch {
+		case is_one_of(key, "aws_access_key_id"):
 			credentials.access_key = value
-		case "aws_secret_access_key":
+		case is_one_of(key, "aws_secret_access_key"):
 			credentials.secret_key = value
-		case "aws_session_token":
+		case is_one_of(key, "aws_session_token"):
 			credentials.session_token = value
-		case "credential_process":
-			if strict && unsupported == .None {
-				unsupported = .Credential_Process
-			}
-		case "web_identity_token_file":
-			if strict && unsupported == .None {
-				unsupported = .Web_Identity
-			}
-		case "sso_start_url", "sso_account_id", "sso_role_name", "sso_region", "sso_session":
-			if strict && unsupported == .None {
-				unsupported = .SSO
-			}
-		case "role_arn", "source_profile", "credential_source", "external_id":
-			if strict && unsupported == .None {
-				unsupported = .Assumed_Role
-			}
+		case is_one_of(key, "credential_process"):
+			found = .Credential_Process
+		case is_one_of(key, "web_identity_token_file"):
+			found = .Web_Identity
+		case is_one_of(key, "sso_start_url", "sso_account_id", "sso_role_name", "sso_region", "sso_session"):
+			found = .SSO
+		case is_one_of(key, "role_arn", "source_profile", "credential_source", "external_id"):
+			found = .Assumed_Role
+		}
+		if strict && unsupported == .None {
+			unsupported = found
 		}
 	}
 	if unsupported != .None {

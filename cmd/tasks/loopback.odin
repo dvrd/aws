@@ -8,6 +8,7 @@ import "core:strings"
 import "core:time"
 
 SANITIZED_FLAGS :: []string{"-thread-count:1", "-vet", "-warnings-as-errors", "-sanitize:address"}
+BUILD_TIMEOUT :: 120 * time.Second
 
 // Observes the native S3 GET against an owned loopback peer that accepts one
 // connection and reads the TLS ClientHello. No provider, no credentials. With no
@@ -79,8 +80,11 @@ loopback_run :: proc(mode, report: string) -> int {
 	for build in ([][]string{compile[:], peer_compile[:]}) {
 		log := fmt.aprintf("%s/build.log", work)
 		child, started := spawn({command = build, output = log, errors = "&output"})
-		code, finished := wait(child, 120 * time.Second)
-		if !started || !finished || code != 0 {
+		code, finished := wait(child, BUILD_TIMEOUT)
+		if started && !finished {
+			return fail("building %s did not finish in %v", build[2], BUILD_TIMEOUT)
+		}
+		if !started || code != 0 {
 			fmt.eprint(read_text(log))
 			return fail("cannot build %s", build[2])
 		}
@@ -125,7 +129,10 @@ loopback_run :: proc(mode, report: string) -> int {
 	native_code, native_finished := wait(native, 10 * time.Second)
 	peer_code, peer_finished := wait(listener, 12 * time.Second)
 	listener_reaped = true
-	if !native_finished || native_code != 0 || read_text(native_errors) != "" {
+	if !native_finished {
+		return fail("the %s probe did not finish in 10s", mode)
+	}
+	if native_code != 0 || read_text(native_errors) != "" {
 		fmt.eprint(read_text(native_errors))
 		return fail("the %s probe failed", mode)
 	}

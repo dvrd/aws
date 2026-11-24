@@ -342,12 +342,34 @@ s3_sha256 :: proc(data: []byte) -> string {
 	return string(hex.encode(digest[:], allocator = context.temp_allocator))
 }
 
+// The secret and the keys derived from it stay on the stack and are erased before
+// returning, so no copy outlives the caller's credentials.
 s3_signature :: proc(secret, region, stamp, scope, canonical: string, service: string = "s3") -> string {
-	key: [32]byte
-	hmac.sum(.SHA256, key[:], transmute([]byte)stamp[:8], transmute([]byte)fmt.tprintf("AWS4%s", secret))
+	// "AWS4" + secret is the first HMAC key. HMAC replaces a key longer than one
+	// SHA-256 block with its digest, so a long secret is hashed here, not copied.
+	seed: [64]byte
+	key, next: [32]byte
+	defer {
+		mem.zero_explicit(&seed, size_of(seed))
+		mem.zero_explicit(&key, size_of(key))
+		mem.zero_explicit(&next, size_of(next))
+	}
+	prefix := "AWS4"
+	seed_size := len(prefix) + len(secret)
+	if seed_size <= len(seed) {
+		copy(seed[:], prefix)
+		copy(seed[len(prefix):], secret)
+	} else {
+		hasher: hash.Context
+		hash.init(&hasher, .SHA256)
+		hash.update(&hasher, transmute([]byte)prefix)
+		hash.update(&hasher, transmute([]byte)secret)
+		hash.final(&hasher, seed[:32])
+		seed_size = 32
+	}
+	hmac.sum(.SHA256, key[:], transmute([]byte)stamp[:8], seed[:seed_size])
 
 	for text in ([]string{region, service, "aws4_request"}) {
-		next: [32]byte
 		hmac.sum(.SHA256, next[:], transmute([]byte)text, key[:])
 		key = next
 	}

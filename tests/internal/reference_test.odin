@@ -123,3 +123,36 @@ presigned_urls_match_the_reference_implementation :: proc(t: ^testing.T) {
 		testing.expectf(t, at > 0 && url[at + len(marker):] == item.signature, "%q: %s", item.key, url)
 	}
 }
+
+Reference_SES :: struct {
+	region, access, secret, token, payload, signature: string,
+}
+
+REFERENCE_SES :: []Reference_SES {
+	{"us-east-1", "AKIAIOSFODNN7EXAMPLE", "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY", "", "{\"fixture\":true}", "e99a4c5a7187beeb1818b101c484bbee3869e6b24eac0d093e2111c1a4ce0153"},
+	{"us-east-1", "AKIAIOSFODNN7EXAMPLE", "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY", "", "{\"Content\":{\"Simple\":{\"Subject\":{\"Data\":\"ñ\"}}}}", "4de1fe3bda5fbc46d3c1d3572c016376a699bdd6b7508e59f3e88988be7b5ada"},
+	{"us-east-1", "ASIAEXAMPLE", "secret/with+chars==", "fixture/token+value==", "{\"fixture\":true}", "2d14c3994f8e9b67789e5596aff76ff2a8fb5f5120e82f28621d6fb886af99e4"},
+	{"us-east-1", "ASIAEXAMPLE", "secret/with+chars==", "fixture/token+value==", "{\"Content\":{\"Simple\":{\"Subject\":{\"Data\":\"ñ\"}}}}", "a193c3de6e8560949c4c0d4e5586e71f27017d03a77856accba399fec1ffd029"},
+	{"eu-west-3", "AKIAIOSFODNN7EXAMPLE", "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY", "", "{\"fixture\":true}", "1a9ee0ed6d1eb0ff9acddd9461a0752609a919a6f4cd742b963ed94df4e29a95"},
+	{"eu-west-3", "AKIAIOSFODNN7EXAMPLE", "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY", "", "{\"Content\":{\"Simple\":{\"Subject\":{\"Data\":\"ñ\"}}}}", "cc234a67dfa78954947dff2f657560866e1ab6cece917ab974839becba96a0dd"},
+	{"eu-west-3", "ASIAEXAMPLE", "secret/with+chars==", "fixture/token+value==", "{\"fixture\":true}", "d9732a40afd3cd062394612eb73325dd6a2be4245b54634dfb98a8c13c90bb83"},
+	{"eu-west-3", "ASIAEXAMPLE", "secret/with+chars==", "fixture/token+value==", "{\"Content\":{\"Simple\":{\"Subject\":{\"Data\":\"ñ\"}}}}", "000b6c8e43f5ffe788851566a93a3cf9577701a929e0b696551369b36b1c183c"},
+}
+
+@(test)
+ses_requests_match_the_reference_implementation :: proc(t: ^testing.T) {
+	context.allocator = context.temp_allocator
+	for item in REFERENCE_SES {
+		payload := item.payload
+		headers := ses_headers(
+			item.region,
+			{item.access, item.secret, item.token},
+			strings.concatenate({"email.", item.region, ".amazonaws.com"}),
+			"20130524T000000Z",
+			transmute([]u8)payload,
+		)
+		authorization := headers[len(headers) - 1]
+		testing.expect(t, strings.has_prefix(authorization, "Authorization: "))
+		testing.expect_value(t, s3_request_signature(authorization), item.signature)
+	}
+}

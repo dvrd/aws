@@ -96,7 +96,7 @@ aws_credentials_with_http :: proc(http_execute: HTTP_Execute) -> (credentials: A
 			return
 		}
 		token = string(reply)
-		if token == "" || strings.contains_any(token, "\r\n") {
+		if token == "" || len(token) > CREDENTIAL_IMDS_TOKEN_MAX || !credential_text_printable(token) {
 			return
 		}
 		role, role_result := http_execute(
@@ -110,7 +110,11 @@ aws_credentials_with_http :: proc(http_execute: HTTP_Execute) -> (credentials: A
 		)
 		role_name := strings.trim_space(string(role))
 
-		if !role_result.ok || role_name == "" || strings.contains_any(role_name, "/\r\n?#") {
+		if !role_result.ok ||
+		   role_name == "" ||
+		   len(role_name) > CREDENTIAL_ROLE_MAX ||
+		   strings.contains_any(role_name, "/?#\\@") ||
+		   !credential_text_printable(role_name) {
 			return
 		}
 
@@ -821,7 +825,7 @@ credential_fetch_ec2 :: proc(cache: ^Credential_Cache) -> (snap: ^Credential_Sna
 	token := string(reply)
 	defer credential_reply_wipe(cache.execute, reply)
 
-	if !ok || token == "" || len(token) > CREDENTIAL_IMDS_TOKEN_MAX || strings.contains_any(token, "\r\n") {
+	if !ok || token == "" || len(token) > CREDENTIAL_IMDS_TOKEN_MAX || !credential_text_printable(token) {
 		return nil, {kind = .Unavailable, source = .EC2}
 	}
 
@@ -924,7 +928,7 @@ credential_metadata_call :: proc(execute: HTTP_Execute, method, url: string, hea
 
 // Fixed link-local metadata only. Full credential URIs and any other host are rejected.
 credential_metadata_url_permitted :: proc(url: string) -> bool {
-	if strings.contains_any(url, "\r\n\\@ ") || !strings.contains(url, "://") {
+	if strings.contains_any(url, "\\@") || !strings.contains(url, "://") || !credential_text_printable(url) {
 		return false
 	}
 
@@ -958,8 +962,20 @@ credential_relative_uri_ok :: proc(relative: string) -> bool {
 		return false
 	}
 
-	if strings.contains(relative, "://") || strings.contains_any(relative, "\r\n#\\@?") {
+	if strings.contains(relative, "://") || strings.contains_any(relative, "#\\@?") {
 		return false
+	}
+
+	return credential_text_printable(relative)
+}
+
+// Printable ASCII only: no space, control character or byte above 0x7e. What the
+// metadata service returns is put into URLs and header values.
+credential_text_printable :: proc(text: string) -> bool {
+	for index in 0 ..< len(text) {
+		if text[index] <= 0x20 || text[index] > 0x7e {
+			return false
+		}
 	}
 
 	return true
@@ -1064,6 +1080,8 @@ credential_profile_load :: proc(
 	}
 	section := ""
 	source := string(data)
+	// An editor's UTF-8 byte order mark is not part of the first section header.
+	source = strings.trim_prefix(source, "\xef\xbb\xbf")
 	for raw_line in strings.split_iterator(&source, "\n") {
 		line := strings.trim_space(raw_line)
 

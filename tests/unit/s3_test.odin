@@ -139,12 +139,12 @@ S3_Time_Fixture :: struct {
 	method, signature: string,
 	file:              bool,
 	calls:             int,
-	result:            S3_Result,
+	result:            network_client.Buffered_HTTP_Result,
 }
 
 s3_time_fixture: ^S3_Time_Fixture
 
-s3_exact_http :: proc(request: HTTP_Request) -> ([]u8, S3_Result) {
+s3_exact_http :: proc(request: HTTP_Request) -> ([]u8, network_client.Buffered_HTTP_Result) {
 	s := s3_time_fixture
 	s.calls += 1
 	testing.expect_value(s.t, request.method, s.method)
@@ -228,8 +228,8 @@ s3_at_operations_emit_deterministic_signed_wire_and_preserve_outcomes :: proc(t:
 		t,
 		!result.ok &&
 		result.status == 503 &&
-		result.error.phase == .Read &&
-		result.error.write_effect == .Unknown &&
+		result.error == .Unavailable &&
+		result.effect == .Response_Received &&
 		fixture.calls == 1,
 	)
 	fixture.result = {
@@ -1127,7 +1127,7 @@ s3_config_refuses_buckets_and_regions_that_would_change_the_host :: proc(t: ^tes
 		"text/plain",
 		http_execute = s3_validation_http,
 	)
-	testing.expect_value(t, result, S3_Result{})
+	testing.expect_value(t, result, S3_Result{error = .Invalid_Input, effect = .Not_Sent})
 	testing.expect_value(t, s3_validation_count.calls, 0)
 }
 
@@ -1173,7 +1173,7 @@ s3_put_file_hashes_files_larger_than_its_buffer :: proc(t: ^testing.T) {
 
 	s3_validation_count = {}
 	result = s3_put_file(config, credentials, "big", "/nonexistent/file", "text/plain", http_execute = s3_validation_http)
-	testing.expect_value(t, result, S3_Result{})
+	testing.expect_value(t, result, S3_Result{error = .Invalid_Input, effect = .Not_Sent})
 	testing.expect_value(t, s3_validation_count.calls, 0)
 	testing.expect_value(t, s3_observer_record.calls, 1)
 }
@@ -1244,4 +1244,110 @@ put_timeout_follows_body_size :: proc(t: ^testing.T) {
 	result = s3_put_file(config, credentials, "key", path, "text/plain", http_execute = s3_timeout_http)
 	testing.expect(t, result.ok && s3_timeout_probe.calls == 1)
 	testing.expect_value(t, s3_timeout_probe.timeout_ms, 120000)
+}
+
+S3_Outcome_Fixture :: struct {
+	calls:  int,
+	result: network_client.Buffered_HTTP_Result,
+}
+
+// Written only by tests that hold aws_test_http_mutex.
+s3_outcome_fixture: ^S3_Outcome_Fixture
+
+s3_outcome_http :: proc(request: HTTP_Request) -> ([]u8, network_client.Buffered_HTTP_Result) {
+	s3_outcome_fixture.calls += 1
+	return nil, s3_outcome_fixture.result
+}
+
+@(test)
+put_and_delete_report_typed_outcomes :: proc(t: ^testing.T) {
+	sync.mutex_lock(&aws_test_http_mutex)
+	defer sync.mutex_unlock(&aws_test_http_mutex)
+	credentials := AWS_Credentials{"fixture-key", "fixture-secret", ""}
+	config := S3_Config{bucket = "examplebucket", region = "us-east-1"}
+	fixture: S3_Outcome_Fixture
+	s3_outcome_fixture = &fixture
+	defer s3_outcome_fixture = nil
+
+	Case :: struct {
+		answer: network_client.Buffered_HTTP_Result,
+		want:   S3_Result,
+	}
+	cases := []Case {
+		{{status = 200, ok = true, transport_ok = true}, {200, true, .None, .Response_Received}},
+		{{status = 403, transport_ok = true}, {403, false, .Rejected, .Response_Received}},
+		{{status = 404, transport_ok = true}, {404, false, .Not_Found, .Response_Received}},
+		{{status = 503, transport_ok = true}, {503, false, .Unavailable, .Response_Received}},
+		{{status = 429, transport_ok = true}, {429, false, .Unavailable, .Response_Received}},
+		{{status = 200, ok = false}, {200, false, .Unavailable, .Response_Received}},
+		{{status = 0, error = {kind = .IO_Failed, write_effect = .Unknown}}, {0, false, .Unavailable, .Unknown}},
+		{{status = 0, error = {kind = .Invalid_Config, write_effect = .Not_Sent}}, {0, false, .Unavailable, .Not_Sent}},
+	}
+	for c in cases {
+		fixture.result = c.answer
+		before := fixture.calls
+		got := s3_put(config, credentials, "a b", nil, "text/plain", http_execute = s3_outcome_http)
+		testing.expect_value(t, got, c.want)
+		testing.expect_value(t, fixture.calls, before + 1)
+		got = s3_delete(config, credentials, "a b", http_execute = s3_outcome_http)
+		testing.expect_value(t, got, c.want)
+	}
+
+	calls := fixture.calls
+	got := s3_put(config, credentials, "", nil, "", http_execute = s3_outcome_http)
+	testing.expect_value(t, got, S3_Result{error = .Invalid_Input, effect = .Not_Sent})
+	testing.expect_value(t, fixture.calls, calls)
+}
+
+@(test)
+put_file_reports_a_missing_file_as_invalid_input :: proc(t: ^testing.T) {
+	sync.mutex_lock(&aws_test_http_mutex)
+	defer sync.mutex_unlock(&aws_test_http_mutex)
+	s3_observer_record = {}
+	s3_observer_set(s3_observer_test_observe)
+	defer s3_observer_set(nil)
+	credentials := AWS_Credentials{"fixture-key", "fixture-secret", ""}
+	config := S3_Config{bucket = "examplebucket", region = "us-east-1"}
+	fixture: S3_Outcome_Fixture
+	s3_outcome_fixture = &fixture
+	defer s3_outcome_fixture = nil
+
+	got := s3_put_file(
+		config,
+		credentials,
+		"a b",
+		"/nonexistent-aws-test-directory/missing",
+		"text/plain",
+		http_execute = s3_outcome_http,
+	)
+	testing.expect_value(t, got, S3_Result{error = .Invalid_Input, effect = .Not_Sent})
+	testing.expect_value(t, fixture.calls, 0)
+	testing.expect_value(t, s3_observer_record.calls, 0)
+}
+
+@(test)
+status_classifier_matches_the_documented_rule :: proc(t: ^testing.T) {
+	Case :: struct {
+		status: int,
+		want:   S3_Error,
+	}
+	cases := []Case {
+		{0, .Unavailable},
+		{200, .None},
+		{204, .None},
+		{299, .None},
+		{301, .Rejected},
+		{400, .Rejected},
+		{403, .Rejected},
+		{404, .Not_Found},
+		{408, .Unavailable},
+		{409, .Rejected},
+		{429, .Unavailable},
+		{500, .Unavailable},
+		{503, .Unavailable},
+		{599, .Unavailable},
+	}
+	for c in cases {
+		testing.expect_value(t, s3_status_error(c.status), c.want)
+	}
 }

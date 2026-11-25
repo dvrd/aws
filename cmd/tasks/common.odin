@@ -67,24 +67,25 @@ root_directory :: proc() -> string {
 	return directory
 }
 
-// A collection with aws from this checkout and every other library linked from
-// the shared collection.
+// A collection with aws from this checkout and the pinned dependencies.
 stage_collection :: proc(work: string) -> (shared: string, ok: bool) {
 	shared = fmt.aprintf("%s/shared", work)
 	if os.make_directory(shared) != nil || os.symlink(fmt.aprintf("%s/src", root_directory()), fmt.aprintf("%s/aws", shared)) != nil {
 		return "", false
 	}
 	source, _ := os.get_absolute_path(shared_source(), context.allocator)
-	entries, error := os.read_all_directory_by_path(source, context.allocator)
-	if error != nil {
-		fail("no shared collection at %s", source)
+	pins, parsed := pins_read(root_directory())
+	if !parsed {
+		fail("cannot read .krs/packages.json")
 		return "", false
 	}
-	for entry in entries {
-		if entry.name == "aws" || strings.has_prefix(entry.name, ".") || !os.is_directory(entry.fullpath) {
-			continue
+	for pin in pins {
+		path := fmt.aprintf("%s/%s", source, pin.name)
+		if !os.is_directory(path) {
+			fail("shared:%s is pinned but not in %s", pin.name, source)
+			return "", false
 		}
-		if os.symlink(entry.fullpath, fmt.aprintf("%s/%s", shared, entry.name)) != nil {
+		if os.symlink(path, fmt.aprintf("%s/%s", shared, pin.name)) != nil {
 			return "", false
 		}
 	}

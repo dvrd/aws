@@ -34,6 +34,9 @@ capture_child :: proc(
 	}
 	append(&variables, nil)
 
+	if deadline - runner.monotonic(runner) <= 0 {
+		return 0, nil, .Child_Deadline
+	}
 	null := posix.open("/dev/null", {.RDWR})
 	if null < 0 {
 		return 0, nil, .System

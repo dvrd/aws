@@ -63,7 +63,8 @@ credential_stress_reader :: proc(data: rawptr) {
 		}
 		turn += 1
 		if failure.kind != .None {
-			if failure.kind != .Expired && failure.kind != .Unavailable && failure.kind != .Waiter_Limit {
+			// Only Expired can happen: the provider always succeeds and readers stay below the waiter cap.
+			if failure.kind != .Expired {
 				sync.atomic_add(&state.unexpected, 1)
 			}
 			continue

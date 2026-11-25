@@ -2,7 +2,6 @@ package main
 
 import "core:encoding/json"
 import "core:os"
-import "core:slice"
 import "core:strings"
 import "core:testing"
 
@@ -26,9 +25,8 @@ the_consumer_vendors_exactly_the_recorded_dependencies :: proc(t: ^testing.T) {
 	for pin in pins.packages {
 		append(&recorded, pin.name)
 	}
-	vendored := slice.clone(CONSUMER_LIBRARIES)
-	slice.sort(recorded[:])
-	slice.sort(vendored)
+	vendored, ok := consumer_libraries(".")
+	testing.expect(t, ok)
 	testing.expect_value(t, strings.join(vendored, ","), strings.join(recorded[:], ","))
 	testing.expect(t, strings.contains(CONSUMER_SOURCE, `import aws "shared:aws"`))
 }

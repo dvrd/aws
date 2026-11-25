@@ -18,7 +18,9 @@ native_errors_command :: proc(arguments: []string) -> int {
 	if !staged {
 		return fail("cannot stage the shared collection")
 	}
-	sanitizer_clang_select()
+	if !sanitizer_clang_select() {
+		return 1
+	}
 	probe := fmt.aprintf("%s/probe", work)
 	driver := fmt.aprintf("%s/driver", work)
 	builds := [][]string {
@@ -30,12 +32,12 @@ native_errors_command :: proc(arguments: []string) -> int {
 		append(&command, compiler(), "build")
 		append(&command, ..build)
 		append(&command, ..SANITIZED_FLAGS)
-		if code := run(command[:]); code != 0 {
+		if code := run(command[:], timeout = BUILD_TIMEOUT); code != 0 {
 			return code
 		}
 	}
 	command := make([dynamic]string)
 	append(&command, driver, "--probe", probe)
 	append(&command, ..arguments)
-	return run(command[:])
+	return run(command[:], timeout = RUN_TIMEOUT)
 }

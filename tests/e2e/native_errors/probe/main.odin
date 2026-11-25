@@ -62,14 +62,14 @@ main :: proc() {
 	passed := result.status == int(status) && result.ok == expected_ok
 
 	if os.args[5] == "response" {
-		passed = passed && result.transport_ok && result.error.kind == .None
+		passed = passed && result.status != 0 && result.error == aws.s3_status_error(int(status))
 	} else if os.args[5] == "trust-failure" {
 		passed =
 			passed &&
 			status == 0 &&
-			!result.transport_ok &&
-			result.error.kind != .None &&
-			result.error.write_effect == .Not_Sent
+			result.status == 0 &&
+			result.error == .Rejected &&
+			result.effect == .Not_Sent
 	} else {
 		os.exit(2)
 	}
@@ -78,7 +78,7 @@ main :: proc() {
 	observation := struct {
 		passed, ok, transport_ok: bool,
 		status:                   int,
-	}{passed, result.ok, result.transport_ok, result.status}
+	}{passed, result.ok, result.status != 0, result.status}
 	data, error := json.marshal(observation)
 	assert(error == nil)
 	defer delete(data)

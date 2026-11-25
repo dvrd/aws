@@ -20,6 +20,41 @@ option_values_are_bounded :: proc(t: ^testing.T) {
 }
 
 @(test)
+clang_majors_are_read_from_version_text :: proc(t: ^testing.T) {
+	testing.expect_value(t, clang_major("Apple clang version 21.0.0 (clang-2100.4.1.1)\nTarget: ..."), "21")
+	testing.expect_value(t, clang_major("Homebrew clang version 22.1.8\n"), "22")
+	testing.expect_value(t, clang_major("gcc (GCC) 14"), "")
+}
+
+@(test)
+the_sanitizer_clang_is_explicit_then_versioned_then_system :: proc(t: ^testing.T) {
+	context.allocator = context.temp_allocator
+	exists :: proc(path: string) -> bool {
+		return path == "first" || path == "second"
+	}
+	installed := []string{"missing", "first", "second"}
+	missing := []string{"missing"}
+	for example in ([]struct {
+		explicit, backend, system: string,
+		candidates: []string,
+		path: string,
+		ok: bool,
+		message: string,
+	}{
+		{"custom", "22", "21", installed, "custom", true, ""},
+		{"", "", "21", installed, "", true, ""},
+		{"", "22", "22", installed, "first", true, ""},
+		{"", "22", "22", missing, "", true, ""},
+		{"", "22", "21", missing, "", false, "need clang 22: install llvm@22 or set ODIN_CLANG_PATH"},
+	}) {
+		path, ok, message := sanitizer_clang_choose(example.explicit, example.backend, example.system, example.candidates, exists)
+		testing.expect_value(t, path, example.path)
+		testing.expect_value(t, ok, example.ok)
+		testing.expect_value(t, message, example.message)
+	}
+}
+
+@(test)
 trees_are_copied_without_hidden_files :: proc(t: ^testing.T) {
 	context.allocator = context.temp_allocator
 	work, created := work_directory("tasks-copy")
@@ -57,6 +92,21 @@ children_report_their_exit_and_are_stopped_at_the_deadline :: proc(t: ^testing.T
 }
 
 @(test)
+children_stopped_at_the_deadline_never_finish :: proc(t: ^testing.T) {
+	context.allocator = context.temp_allocator
+	work, created := work_directory("tasks-stop")
+	testing.expect(t, created)
+	defer os.remove_all(work)
+	for i in 0 ..< 10 {
+		testing.expect_value(t, run({"/bin/sh", "-c", fmt.aprintf("sleep 1; touch %s/finished-%d", work, i)}, timeout = time.Millisecond), 124)
+	}
+	time.sleep(1500 * time.Millisecond)
+	for i in 0 ..< 10 {
+		testing.expectf(t, !os.exists(fmt.aprintf("%s/finished-%d", work, i)), "child %d finished after it was stopped", i)
+	}
+}
+
+@(test)
 an_exact_environment_is_all_a_child_sees :: proc(t: ^testing.T) {
 	context.allocator = context.temp_allocator
 	work, created := work_directory("tasks-env")
@@ -64,10 +114,30 @@ an_exact_environment_is_all_a_child_sees :: proc(t: ^testing.T) {
 	defer os.remove_all(work)
 	file := fmt.aprintf("%s/env", work)
 	child, started := spawn({command = {"/usr/bin/env"}, environment = {"ONLY=1"}, exact = true, output = file})
-	testing.expect(t, started)
-	code, finished := wait(child, 10 * time.Second)
+	if !testing.expect(t, started) {
+		return
+	}
+	code, finished := wait(&child, 10 * time.Second)
 	testing.expect(t, finished && code == 0)
 	testing.expect_value(t, strings.trim_space(read_text(file)), "ONLY=1")
 }
 
 SHA256_OF_SOURCE_A :: "c5c36b8189a55ac1308879d5a730951fd75282a1e7175bdda77e1a2e8649f14a"
+
+@(test)
+alive_is_false_once_the_child_exits :: proc(t: ^testing.T) {
+	context.allocator = context.temp_allocator
+	child, started := spawn({command = {"/bin/sh", "-c", "exit 4"}})
+	if !testing.expect(t, started) {
+		return
+	}
+	defer stop(&child)
+	start := time.tick_now()
+	for alive(&child) && time.tick_since(start) < 2 * time.Second {
+		time.sleep(5 * time.Millisecond)
+	}
+	testing.expect(t, child.reaped)
+	testing.expect(t, !alive(&child))
+	code, finished := wait(&child, time.Second)
+	testing.expect(t, finished && code == 4)
+}

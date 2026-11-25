@@ -17,6 +17,8 @@ Command :: struct {
 }
 
 COMMANDS := [?]Command {
+	{"deps", deps_command, "deps [--strict]", "Compare the shared collection with the pins in .krs/packages.json."},
+	{"odin", odin_command, "odin [--strict]", "Compare the compiler with the Odin fork commit in ODIN_COMMIT."},
 	{"check", check_command, "check", "Type-check the library and run every offline test."},
 	{"build", build_command, "build [Odin flags]", "Type-check the library with vet and warnings as errors."},
 	{
@@ -26,7 +28,7 @@ COMMANDS := [?]Command {
 		"Stage the checkout and run the Odin test suites.",
 	},
 	{"layout", layout_command, "layout", "Check that every source file has a unit test file of the same name."},
-	{"signatures", signatures_command, "signatures", "Recalculate the SigV4 fixtures with OpenSSL."},
+	{"signatures", signatures_command, "signatures", "Check the SigV4 reference signatures by recomputing them with OpenSSL."},
 	{"consumer", consumer_command, "consumer", "Build and run a consumer that vendors the library."},
 	{
 		"credentials",
@@ -46,6 +48,7 @@ COMMANDS := [?]Command {
 		"native-errors [--report FILE]",
 		"Check S3 error handling against an owned TLS peer.",
 	},
+	{"probe", probe_command, "probe", "Build the live qualification probe into build/probe."},
 	{
 		"version",
 		version_command,
@@ -55,7 +58,7 @@ COMMANDS := [?]Command {
 	{
 		"release",
 		release_command,
-		"release [--stable]",
+		"release [--stable] [--allow-drift] [--push]",
 		"Check, then tag HEAD with the next semantic version. --stable publishes v1.0.0.",
 	},
 }
@@ -91,7 +94,7 @@ main :: proc() {
 
 // Everything offline, in the order a failure is cheapest to find. Each step is a
 // command of COMMANDS.
-CHECK_STEPS :: []string{"build", "test", "signatures", "consumer", "credentials", "loopback", "native-errors"}
+CHECK_STEPS :: []string{"deps", "odin", "build", "test", "signatures", "consumer", "credentials", "loopback", "native-errors"}
 
 check_command :: proc(arguments: []string) -> int {
 	for step in CHECK_STEPS {
@@ -121,5 +124,5 @@ build_command :: proc(arguments: []string) -> int {
 	append(&command, compiler(), "check", "src", "-no-entry-point", "-vet", "-warnings-as-errors")
 	append(&command, fmt.aprintf("-collection:shared=%s", shared_source()))
 	append(&command, ..arguments)
-	return run(command[:])
+	return run(command[:], timeout = BUILD_TIMEOUT)
 }

@@ -16,6 +16,7 @@
 *.dSYM/
 build/
 node_modules/
+plans/
 
 # Local credentials and runtime state
 .env

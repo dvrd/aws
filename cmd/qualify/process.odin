@@ -1,9 +1,19 @@
 package main
 
 import "core:c"
+import "core:mem"
 import "core:strings"
 import "core:sys/posix"
 import "core:time"
+
+// Zeroes the NAME=value strings built for a child; the parent no longer needs them.
+variables_wipe :: proc(variables: []cstring) {
+	for variable in variables {
+		if variable != nil {
+			mem.zero_explicit(rawptr(variable), len(string(variable)))
+		}
+	}
+}
 
 // Runs one child in its own session with only the given environment, no input and
 // no error stream, and returns its exit code and at most limit bytes of output.
@@ -34,17 +44,24 @@ capture_child :: proc(
 	}
 	append(&variables, nil)
 
+	if deadline - runner.monotonic(runner) <= 0 {
+		variables_wipe(variables[:])
+		return 0, nil, .Child_Deadline
+	}
 	null := posix.open("/dev/null", {.RDWR})
 	if null < 0 {
+		variables_wipe(variables[:])
 		return 0, nil, .System
 	}
 	channel: [2]posix.FD
 	if posix.pipe(&channel) != .OK {
+		variables_wipe(variables[:])
 		posix.close(null)
 		return 0, nil, .System
 	}
 	child := posix.fork()
 	if child < 0 {
+		variables_wipe(variables[:])
 		posix.close(null)
 		posix.close(channel[0])
 		posix.close(channel[1])
@@ -62,12 +79,17 @@ capture_child :: proc(
 		posix.execve(arguments[0], raw_data(arguments), raw_data(variables))
 		posix._exit(127)
 	}
+	// The child has its own copy of the environment.
+	variables_wipe(variables[:])
 	posix.close(null)
 	posix.close(channel[1])
 	reaped := false
 	status: c.int
 	defer {
 		if !reaped {
+			// The child may not have called setsid yet, so its group may not exist:
+			// kill the child itself, then the group it may have started after exec.
+			posix.kill(child, .SIGKILL)
 			posix.killpg(child, .SIGKILL)
 			child_wait(child, &status, 5 * time.Second)
 		}
@@ -105,8 +127,14 @@ capture_child :: proc(
 		}
 	}
 	patience := max(deadline - runner.monotonic(runner), 10 * time.Millisecond)
-	if !child_wait(child, &status, patience) {
+	switch child_wait(child, &status, patience) {
+	case .Running:
 		return 0, nil, .Child_Deadline
+	case .Lost:
+		// The kernel or someone else reaped it: never signal that pid again.
+		reaped = true
+		return 0, nil, .System
+	case .Reaped:
 	}
 	reaped = true
 	if posix.WIFEXITED(status) {
@@ -117,20 +145,25 @@ capture_child :: proc(
 	return code, collected[:], .None
 }
 
-// Reaps child within patience of real time. False means it is still running.
-child_wait :: proc(child: posix.pid_t, status: ^c.int, patience: time.Duration) -> bool {
+Child_Wait :: enum {
+	Reaped, // status holds the child's exit status
+	Running, // patience ran out; the child was not reaped
+	Lost, // waitpid failed: the status is unknown (for example SIGCHLD is ignored)
+}
+
+// Reaps child within patience of real time.
+child_wait :: proc(child: posix.pid_t, status: ^c.int, patience: time.Duration) -> Child_Wait {
 	started := time.tick_now()
 	for {
 		result := posix.waitpid(child, status, {.NOHANG})
 		if result == child {
-			return true
+			return .Reaped
 		}
 		if result < 0 && posix.errno() != .EINTR {
-			// Nothing left to reap.
-			return true
+			return .Lost
 		}
 		if time.tick_since(started) >= patience {
-			return false
+			return .Running
 		}
 		time.sleep(2 * time.Millisecond)
 	}

@@ -8,7 +8,6 @@ import "core:strings"
 import "core:time"
 
 SANITIZED_FLAGS :: []string{"-thread-count:1", "-vet", "-warnings-as-errors", "-sanitize:address"}
-BUILD_TIMEOUT :: 120 * time.Second
 
 LOOPBACK_PEER :: "tests/e2e/loopback/peer"
 LOOPBACK_DEFAULT_PROBE :: "tests/e2e/loopback/production_get_probe"
@@ -38,7 +37,9 @@ loopback_command :: proc(arguments: []string) -> int {
 	if mode == "" && report != "" {
 		return fail("--report needs --mode")
 	}
-	sanitizer_clang_select()
+	if !sanitizer_clang_select() {
+		return 1
+	}
 	for candidate in ([]string{"default", "observer"}) {
 		if mode != "" && mode != candidate {
 			continue
@@ -48,6 +49,15 @@ loopback_command :: proc(arguments: []string) -> int {
 		}
 	}
 	return 0
+}
+
+ready_port :: proc(text: string) -> int {
+	first, separator, _ := strings.partition(text, "\n")
+	if separator == "" || !strings.has_prefix(first, "ready ") {
+		return 0
+	}
+	port, ok := strconv.parse_int(first[len("ready "):], 10)
+	return port if ok else 0
 }
 
 loopback_run :: proc(mode, report: string) -> int {
@@ -86,11 +96,14 @@ loopback_run :: proc(mode, report: string) -> int {
 	for build in ([][]string{compile[:], peer_compile[:]}) {
 		log := fmt.aprintf("%s/build.log", work)
 		child, started := spawn({command = build, output = log, errors = "&output"})
-		code, finished := wait(child, BUILD_TIMEOUT)
-		if started && !finished {
+		if !started {
+			return fail("cannot start %s", build[0])
+		}
+		code, finished := wait(&child, BUILD_TIMEOUT)
+		if !finished {
 			return fail("building %s did not finish in %v", build[2], BUILD_TIMEOUT)
 		}
-		if !started || code != 0 {
+		if code != 0 {
 			fmt.eprint(read_text(log))
 			return fail("cannot build %s", build[2])
 		}
@@ -102,18 +115,14 @@ loopback_run :: proc(mode, report: string) -> int {
 	if !listening {
 		return fail("cannot start the peer")
 	}
-	listener_reaped := false
-	defer if !listener_reaped {
-		stop(listener)
-	}
+	defer stop(&listener)
 	port := 0
 	for attempt := 0; attempt < 250 && port == 0; attempt += 1 {
-		first, _, _ := strings.partition(read_text(peer_output), "\n")
-		if strings.has_prefix(first, "ready ") {
-			port, _ = strconv.parse_int(first[len("ready "):], 10)
+		port = ready_port(read_text(peer_output))
+		if port != 0 {
 			break
 		}
-		if !alive(listener) {
+		if !alive(&listener) {
 			fmt.eprint(read_text(peer_errors))
 			return fail("the peer exited before it was ready")
 		}
@@ -132,9 +141,8 @@ loopback_run :: proc(mode, report: string) -> int {
 	if !started {
 		return fail("cannot start the probe")
 	}
-	native_code, native_finished := wait(native, 10 * time.Second)
-	peer_code, peer_finished := wait(listener, 12 * time.Second)
-	listener_reaped = true
+	native_code, native_finished := wait(&native, 10 * time.Second)
+	peer_code, peer_finished := wait(&listener, 12 * time.Second)
 	if !native_finished {
 		return fail("the %s probe did not finish in 10s", mode)
 	}

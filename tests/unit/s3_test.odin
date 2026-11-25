@@ -3,7 +3,10 @@ package aws
 import network_client "shared:surf"
 import tls "shared:async/tls"
 import "core:bytes"
+import "core:crypto/hash"
+import "core:encoding/hex"
 import "core:fmt"
+import "core:io"
 import "core:mem"
 import "core:os"
 import "core:strings"
@@ -32,53 +35,6 @@ sigv4_matches_independent_fixture :: proc(t: ^testing.T) {
 		canonical,
 	)
 	testing.expect_value(t, actual, "f0e8bdb87c964420e857bd35b5d6ed310bd44f0170aba48dd91039c6036bdb41")
-}
-
-AWS_Test_HTTP :: struct {
-	t:                 ^testing.T,
-	calls:             int,
-	method, url, body: string,
-	file_body:         bool,
-	status:            int,
-	response:          string,
-	ok:                bool,
-}
-
-// Serialize only the shared fake provider; unrelated tests can run in parallel.
-aws_test_http_mutex: sync.Mutex
-
-aws_test_http_state: ^AWS_Test_HTTP
-
-aws_test_http :: proc(request: HTTP_Request) -> ([]u8, network_client.Buffered_HTTP_Result) {
-	state := aws_test_http_state
-	state.calls += 1
-	testing.expect_value(state.t, request.method, state.method)
-	testing.expect_value(state.t, request.url, state.url)
-	testing.expect(state.t, !request.allow_http && request.ca_file == "", "fake peer receives HTTPS policy")
-	if state.file_body {
-		testing.expect(state.t, request.upload_file != nil && request.upload_size == 7 && request.timeout_ms == 120000)
-		buffer: [7]u8
-		n, error := os.read(request.upload_file, buffer[:])
-		testing.expect(state.t, error == nil && n == 7 && string(buffer[:]) == "payload")
-	} else {
-		testing.expect(state.t, request.upload_file == nil && request.upload_size == 0 && request.timeout_ms == 15000)
-
-		if state.body != "" {
-			testing.expect_value(state.t, string(request.body), state.body)
-		}
-	}
-	auth, date := false, false
-	for header in request.headers {
-		if strings.has_prefix(header, "Authorization: AWS4-HMAC-SHA256 Credential=fixture-key/") {
-			auth = true
-		}
-
-		if strings.has_prefix(header, "x-amz-date: ") {
-			date = true
-		}
-	}
-	testing.expect(state.t, auth && date, "signed headers reach the injected provider")
-	return transmute([]u8)state.response, {status = state.status, ok = state.ok}
 }
 
 @(test)
@@ -137,12 +93,12 @@ S3_Time_Fixture :: struct {
 	method, signature: string,
 	file:              bool,
 	calls:             int,
-	result:            S3_Result,
+	result:            network_client.Buffered_HTTP_Result,
 }
 
 s3_time_fixture: ^S3_Time_Fixture
 
-s3_exact_http :: proc(request: HTTP_Request) -> ([]u8, S3_Result) {
+s3_exact_http :: proc(request: HTTP_Request) -> ([]u8, network_client.Buffered_HTTP_Result) {
 	s := s3_time_fixture
 	s.calls += 1
 	testing.expect_value(s.t, request.method, s.method)
@@ -226,8 +182,8 @@ s3_at_operations_emit_deterministic_signed_wire_and_preserve_outcomes :: proc(t:
 		t,
 		!result.ok &&
 		result.status == 503 &&
-		result.error.phase == .Read &&
-		result.error.write_effect == .Unknown &&
+		result.error == .Unavailable &&
+		result.effect == .Response_Received &&
 		fixture.calls == 1,
 	)
 	fixture.result = {
@@ -296,6 +252,14 @@ s3_exact_presign_time_and_global_endpoint_fixture :: proc(t: ^testing.T) {
 	)
 	_, invalid := s3_download_url(config, credentials, "test.txt", 604801, now)
 	testing.expect(t, !invalid)
+	for expires in ([]int{0, -1}) {
+		_, refused := s3_download_url(config, credentials, "test.txt", expires, now)
+		testing.expectf(t, !refused, "%d", expires)
+	}
+	for expires in ([]int{1, 604800}) {
+		_, accepted := s3_download_url(config, credentials, "test.txt", expires, now)
+		testing.expectf(t, accepted, "%d", expires)
+	}
 }
 
 // Expected signatures independently calculated with Python hashlib/hmac.
@@ -712,6 +676,30 @@ s3_get_maps_status_and_releases_every_failed_body :: proc(t: ^testing.T) {
 		testing.expect(t, body == nil)
 	}
 
+	// The native executor stops reading an error body above bytes_max and reports
+	// Too_Large with the status; the status decides.
+	fixture.error = .Too_Large
+	fixture.body_size = 0
+	for item in cases {
+		if item.status == 0 {
+			continue
+		}
+		fixture.status = item.status
+		body, e := s3_get(
+			config,
+			credentials,
+			"a b/c+d",
+			8,
+			time.unix(1369353600, 0),
+			context.allocator,
+			s3_get_fixture_execute,
+		)
+		testing.expect_value(t, e, item.error)
+		testing.expect(t, body == nil)
+	}
+	fixture.error = .None
+	fixture.body_size = 7
+
 	fixture.status = 200
 	fixture.body_size = 9
 	body, e := s3_get(
@@ -874,6 +862,25 @@ s3_observer_counts_a_missing_object_as_an_answer :: proc(t: ^testing.T) {
 	_, e := s3_get(config, credentials, "", 8, allocator = context.allocator, execute = s3_get_fixture_execute)
 	testing.expect_value(t, e, S3_Get_Error.Invalid_Input)
 	testing.expect_value(t, s3_observer_record.calls, len(cases))
+
+	// A 404 whose body exceeded bytes_max is still an answer, not a failure.
+	failures := s3_observer_record.failures
+	fixture.error = .Too_Large
+	fixture.status = 404
+	body, e2 := s3_get(
+		config,
+		credentials,
+		"a b/c+d",
+		8,
+		time.unix(1369353600, 0),
+		context.allocator,
+		s3_get_fixture_execute,
+	)
+	fixture.error = .None
+	testing.expect(t, body == nil)
+	testing.expect_value(t, e2, S3_Get_Error.Not_Found)
+	testing.expect_value(t, s3_observer_record.calls, len(cases) + 1)
+	testing.expect_value(t, s3_observer_record.failures, failures)
 }
 
 @(test)
@@ -1007,4 +1014,419 @@ a_file_upload_without_its_digest_is_not_sent :: proc(t: ^testing.T) {
 	)
 	testing.expect(t, !result.ok)
 	testing.expect_value(t, s3_sent.method, "")
+}
+
+S3_Validation_Count :: struct {
+	calls:       int,
+	upload_size: i64,
+	digest:      string,
+}
+
+// Written only by tests that hold aws_test_http_mutex.
+s3_validation_count: S3_Validation_Count
+
+s3_validation_http :: proc(request: HTTP_Request) -> ([]u8, network_client.Buffered_HTTP_Result) {
+	s3_validation_count.calls += 1
+	s3_validation_count.upload_size = request.upload_size
+	for header in request.headers {
+		if strings.has_prefix(header, "x-amz-content-sha256: ") {
+			s3_validation_count.digest = strings.clone(header[len("x-amz-content-sha256: "):], context.temp_allocator)
+		}
+	}
+	return nil, {status = 200, ok = true, transport_ok = true}
+}
+
+@(test)
+s3_config_refuses_buckets_and_regions_that_would_change_the_host :: proc(t: ^testing.T) {
+	sync.mutex_lock(&aws_test_http_mutex)
+	defer sync.mutex_unlock(&aws_test_http_mutex)
+	context.allocator = context.temp_allocator
+	long_ok := strings.repeat("a", 63)
+	long_bad := strings.repeat("a", 64)
+	required :: "S3 requires AWS_S3_BUCKET and AWS_REGION"
+	for item in ([]struct {
+			bucket, region, expected: string,
+		} {
+			{"", "us-east-1", ""},
+			{"abc", "us-east-1", ""},
+			{long_ok, "us-east-1", ""},
+			{"my-bucket.v2", "us-east-1", ""},
+			{"ab", "us-east-1", required},
+			{long_bad, "us-east-1", required},
+			{"abc", "", required},
+			{"Abc", "us-east-1", "Invalid S3 bucket name"},
+			{"my_bucket", "us-east-1", "Invalid S3 bucket name"},
+			{"my/bucket", "us-east-1", "Invalid S3 bucket name"},
+			{"my bucket", "us-east-1", "Invalid S3 bucket name"},
+			{"abc", "US-EAST-1", "Invalid AWS region"},
+			{"abc", "us.east.1", "Invalid AWS region"},
+			{"abc", "us-east-1/", "Invalid AWS region"},
+			{"abc", "eu_west_1", "Invalid AWS region"},
+		}) {
+		testing.expectf(
+			t,
+			s3_config_error({bucket = item.bucket, region = item.region}) == item.expected,
+			"%q %q",
+			item.bucket,
+			item.region,
+		)
+	}
+
+	s3_validation_count = {}
+	result := s3_put(
+		{bucket = "abc", region = "us-east-1/"},
+		AWS_Credentials{"fixture-key", "fixture-secret", ""},
+		"key",
+		nil,
+		"text/plain",
+		http_execute = s3_validation_http,
+	)
+	testing.expect_value(t, result, S3_Result{error = .Invalid_Input, effect = .Not_Sent})
+	testing.expect_value(t, s3_validation_count.calls, 0)
+}
+
+@(test)
+s3_put_file_hashes_files_larger_than_its_buffer :: proc(t: ^testing.T) {
+	sync.mutex_lock(&aws_test_http_mutex)
+	defer sync.mutex_unlock(&aws_test_http_mutex)
+	s3_observer_record = {}
+	s3_observer_set(s3_observer_test_observe)
+	defer s3_observer_set(nil)
+
+	SIZE :: 200000
+	data := make([]byte, SIZE)
+	defer delete(data)
+	for &item, index in data {
+		item = byte(index % 251)
+	}
+	digest: [32]byte
+	hash.hash(.SHA256, data, digest[:])
+	expected := hex.encode(digest[:])
+	defer delete(expected)
+
+	directory, error := os.make_directory_temp("", "aws-upload-*", context.allocator)
+	if !testing.expect(t, error == nil) {
+		return
+	}
+	defer delete(directory)
+	defer os.remove(directory)
+	path := fmt.aprintf("%s/body", directory)
+	defer delete(path)
+	defer os.remove(path)
+	testing.expect(t, os.write_entire_file(path, data) == nil)
+
+	credentials := AWS_Credentials{"fixture-key", "fixture-secret", ""}
+	config := S3_Config{bucket = "examplebucket", region = "us-east-1"}
+	s3_validation_count = {}
+	result := s3_put_file(config, credentials, "big", path, "text/plain", http_execute = s3_validation_http)
+	testing.expect(t, result.ok)
+	testing.expect_value(t, s3_validation_count.calls, 1)
+	testing.expect_value(t, s3_validation_count.upload_size, i64(SIZE))
+	testing.expect_value(t, s3_validation_count.digest, string(expected))
+	testing.expect_value(t, s3_observer_record.calls, 1)
+
+	s3_validation_count = {}
+	result = s3_put_file(config, credentials, "big", "/nonexistent/file", "text/plain", http_execute = s3_validation_http)
+	testing.expect_value(t, result, S3_Result{error = .Invalid_Input, effect = .Not_Sent})
+	testing.expect_value(t, s3_validation_count.calls, 0)
+	testing.expect_value(t, s3_observer_record.calls, 1)
+}
+
+@(test)
+request_builders_refuse_a_token_with_a_space :: proc(t: ^testing.T) {
+	config := S3_Config{bucket = "examplebucket", region = "us-east-1"}
+	credentials := AWS_Credentials{"fixture-key", "fixture-secret", "fixture-token "}
+	_, get_ok := s3_get_request(config, credentials, "key")
+	testing.expect(t, !get_ok)
+	_, put_ok := s3_put_request(config, credentials, "key", nil, "text/plain")
+	testing.expect(t, !put_ok)
+}
+
+S3_Timeout_Probe :: struct {
+	timeout_ms: i64,
+	calls:      int,
+}
+
+s3_timeout_probe: S3_Timeout_Probe
+
+s3_timeout_http :: proc(request: HTTP_Request) -> ([]u8, network_client.Buffered_HTTP_Result) {
+	s3_timeout_probe.calls += 1
+	s3_timeout_probe.timeout_ms = request.timeout_ms
+	return nil, {status = 200, ok = true, transport_ok = true}
+}
+
+@(test)
+put_timeout_follows_body_size :: proc(t: ^testing.T) {
+	// The blocking calls report to the process-wide observer, which other tests count.
+	sync.mutex_lock(&aws_test_http_mutex)
+	defer sync.mutex_unlock(&aws_test_http_mutex)
+	config := S3_Config {
+		bucket = "examplebucket",
+		region = "us-east-1",
+	}
+	credentials := AWS_Credentials{"fixture-key", "fixture-secret", ""}
+	sizes := []struct {
+		bytes:   int,
+		timeout: i64,
+	}{{7, 15000}, {1 << 20, 16000}, {64 << 20, 79000}, {200 << 20, 120000}}
+	for size in sizes {
+		body := make([]u8, size.bytes)
+		s3_timeout_probe = {}
+		result := s3_put(config, credentials, "key", body, "text/plain", http_execute = s3_timeout_http)
+		delete(body)
+		testing.expect(t, result.ok && s3_timeout_probe.calls == 1)
+		testing.expect_value(t, s3_timeout_probe.timeout_ms, size.timeout)
+	}
+
+	s3_timeout_probe = {}
+	result := s3_delete(config, credentials, "key", http_execute = s3_timeout_http)
+	testing.expect(t, result.ok && s3_timeout_probe.calls == 1)
+	testing.expect_value(t, s3_timeout_probe.timeout_ms, 15000)
+
+	directory, error := os.make_directory_temp("", "aws-upload-*", context.allocator)
+	if !testing.expect(t, error == nil) {
+		return
+	}
+
+	defer delete(directory)
+	defer os.remove(directory)
+	path := fmt.aprintf("%s/body", directory)
+	defer delete(path)
+	defer os.remove(path)
+	testing.expect(t, os.write_entire_file(path, "payload") == nil)
+	s3_timeout_probe = {}
+	result = s3_put_file(config, credentials, "key", path, "text/plain", http_execute = s3_timeout_http)
+	testing.expect(t, result.ok && s3_timeout_probe.calls == 1)
+	testing.expect_value(t, s3_timeout_probe.timeout_ms, 120000)
+}
+
+S3_Outcome_Fixture :: struct {
+	calls:  int,
+	result: network_client.Buffered_HTTP_Result,
+}
+
+// Written only by tests that hold aws_test_http_mutex.
+s3_outcome_fixture: ^S3_Outcome_Fixture
+
+s3_outcome_http :: proc(request: HTTP_Request) -> ([]u8, network_client.Buffered_HTTP_Result) {
+	s3_outcome_fixture.calls += 1
+	return nil, s3_outcome_fixture.result
+}
+
+@(test)
+put_and_delete_report_typed_outcomes :: proc(t: ^testing.T) {
+	sync.mutex_lock(&aws_test_http_mutex)
+	defer sync.mutex_unlock(&aws_test_http_mutex)
+	credentials := AWS_Credentials{"fixture-key", "fixture-secret", ""}
+	config := S3_Config{bucket = "examplebucket", region = "us-east-1"}
+	fixture: S3_Outcome_Fixture
+	s3_outcome_fixture = &fixture
+	defer s3_outcome_fixture = nil
+
+	Case :: struct {
+		answer: network_client.Buffered_HTTP_Result,
+		want:   S3_Result,
+	}
+	cases := []Case {
+		{{status = 200, ok = true, transport_ok = true}, {200, true, .None, .Response_Received}},
+		{{status = 403, transport_ok = true}, {403, false, .Rejected, .Response_Received}},
+		{{status = 404, transport_ok = true}, {404, false, .Not_Found, .Response_Received}},
+		{{status = 503, transport_ok = true}, {503, false, .Unavailable, .Response_Received}},
+		{{status = 429, transport_ok = true}, {429, false, .Unavailable, .Response_Received}},
+		{{status = 200, ok = false}, {200, false, .Unavailable, .Response_Received}},
+		{{status = 0, error = {kind = .IO_Failed, write_effect = .Unknown}}, {0, false, .Unavailable, .Unknown}},
+		{{status = 0, error = {kind = .Invalid_Config, write_effect = .Not_Sent}}, {0, false, .Invalid_Input, .Not_Sent}},
+		{{status = 0, error = {kind = .TLS_Failed, tls_error = tls.Protocol_Error.Unknown_Ca, write_effect = .Not_Sent}}, {0, false, .Rejected, .Not_Sent}},
+		{{status = 0}, {0, false, .Unavailable, .Unknown}},
+	}
+	for c in cases {
+		fixture.result = c.answer
+		before := fixture.calls
+		got := s3_put(config, credentials, "a b", nil, "text/plain", http_execute = s3_outcome_http)
+		testing.expect_value(t, got, c.want)
+		testing.expect_value(t, fixture.calls, before + 1)
+		got = s3_delete(config, credentials, "a b", http_execute = s3_outcome_http)
+		testing.expect_value(t, got, c.want)
+	}
+
+	calls := fixture.calls
+	got := s3_put(config, credentials, "", nil, "", http_execute = s3_outcome_http)
+	testing.expect_value(t, got, S3_Result{error = .Invalid_Input, effect = .Not_Sent})
+	testing.expect_value(t, fixture.calls, calls)
+}
+
+@(test)
+put_file_reports_a_missing_file_as_invalid_input :: proc(t: ^testing.T) {
+	sync.mutex_lock(&aws_test_http_mutex)
+	defer sync.mutex_unlock(&aws_test_http_mutex)
+	s3_observer_record = {}
+	s3_observer_set(s3_observer_test_observe)
+	defer s3_observer_set(nil)
+	credentials := AWS_Credentials{"fixture-key", "fixture-secret", ""}
+	config := S3_Config{bucket = "examplebucket", region = "us-east-1"}
+	fixture: S3_Outcome_Fixture
+	s3_outcome_fixture = &fixture
+	defer s3_outcome_fixture = nil
+
+	got := s3_put_file(
+		config,
+		credentials,
+		"a b",
+		"/nonexistent-aws-test-directory/missing",
+		"text/plain",
+		http_execute = s3_outcome_http,
+	)
+	testing.expect_value(t, got, S3_Result{error = .Invalid_Input, effect = .Not_Sent})
+	testing.expect_value(t, fixture.calls, 0)
+	testing.expect_value(t, s3_observer_record.calls, 0)
+}
+
+@(test)
+status_classifier_matches_the_documented_rule :: proc(t: ^testing.T) {
+	Case :: struct {
+		status: int,
+		want:   S3_Error,
+	}
+	cases := []Case {
+		{0, .Unavailable},
+		{200, .None},
+		{204, .None},
+		{299, .None},
+		{301, .Rejected},
+		{400, .Rejected},
+		{403, .Rejected},
+		{404, .Not_Found},
+		{408, .Unavailable},
+		{409, .Rejected},
+		{429, .Unavailable},
+		{500, .Unavailable},
+		{503, .Unavailable},
+		{599, .Unavailable},
+	}
+	for c in cases {
+		testing.expect_value(t, s3_status_error(c.status), c.want)
+	}
+}
+
+// A response laid out the way Surf builds one: body_storage allocated with
+// context.allocator and holding payload, body a view of its first body_length bytes.
+s3_test_response :: proc(payload: string, body_length: int) -> network_client.Response {
+	storage := make([dynamic]u8, 0, 4096, context.allocator)
+	append(&storage, payload)
+	return {status = 200, allocator = context.allocator, body_storage = storage, body = storage[:body_length]}
+}
+
+@(test)
+s3_get_body_hand_over_frees_exactly_once :: proc(t: ^testing.T) {
+	{
+		// A whole body is taken: the caller owns Surf's storage.
+		response := s3_test_response("object bytes", len("object bytes"))
+		storage := raw_data(response.body_storage)
+		body, ok := s3_get_body_take(&response, context.allocator)
+		testing.expect(t, ok)
+		testing.expect_value(t, string(body), "object bytes")
+		testing.expect(t, raw_data(body) == storage)
+		testing.expect(t, response.body == nil)
+		network_client.response_destroy(&response)
+		delete(body, context.allocator)
+	}
+	{
+		// A view that is not the whole buffer cannot be taken, so it is copied.
+		response := s3_test_response("object bytes and more", len("object bytes"))
+		storage := raw_data(response.body_storage)
+		body, ok := s3_get_body_take(&response, context.allocator)
+		testing.expect(t, ok)
+		testing.expect_value(t, string(body), "object bytes")
+		testing.expect(t, raw_data(body) != storage)
+		network_client.response_destroy(&response)
+		delete(body, context.allocator)
+	}
+	{
+		// An empty body gives a result that frees cleanly.
+		response := s3_test_response("", 0)
+		body, ok := s3_get_body_take(&response, context.allocator)
+		testing.expect(t, ok)
+		testing.expect_value(t, len(body), 0)
+		network_client.response_destroy(&response)
+		delete(body, context.allocator)
+	}
+}
+
+@(test)
+s3_transport_errors_say_whether_to_retry :: proc(t: ^testing.T) {
+	Case :: struct {
+		failure: network_client.HTTP_Error,
+		want:    S3_Error,
+	}
+	cases := []Case {
+		{{kind = .None}, .Unavailable},
+		{{kind = .Invalid_URL}, .Invalid_Input},
+		{{kind = .Insecure_URL}, .Invalid_Input},
+		{{kind = .Invalid_Config}, .Invalid_Input},
+		{{kind = .Invalid_Method}, .Invalid_Input},
+		{{kind = .Invalid_Header}, .Invalid_Input},
+		{{kind = .Reserved_Header}, .Invalid_Input},
+		{{kind = .Address_Rejected}, .Invalid_Input},
+		{{kind = .Redirect_Limit}, .Rejected},
+		{{kind = .Invalid_Redirect}, .Rejected},
+		{{kind = .Unsafe_Redirect}, .Rejected},
+		{{kind = .Body_Oversized, status = 200}, .Too_Large},
+		{{kind = .TLS_Failed, tls_error = tls.Protocol_Error.Unknown_Ca}, .Rejected},
+		{{kind = .TLS_Failed, tls_error = tls.Protocol_Error.Certificate_Expired}, .Rejected},
+		{{kind = .TLS_Failed, tls_error = tls.General_Error.Invalid_Trust_Roots}, .Invalid_Input},
+		{{kind = .TLS_Failed, tls_error = tls.General_Error.Invalid_SNI_Hostname}, .Invalid_Input},
+		{{kind = .TLS_Failed, tls_error = io.Error.Unexpected_EOF}, .Unavailable},
+		{{kind = .TLS_Failed, tls_error = tls.Protocol_Error.Close_Notify}, .Unavailable},
+		{{kind = .TLS_Failed}, .Unavailable},
+		{{kind = .Dial_Failed}, .Unavailable},
+		{{kind = .IO_Failed}, .Unavailable},
+		{{kind = .Deadline_Failed}, .Unavailable},
+		{{kind = .Unexpected_EOF}, .Unavailable},
+		{{kind = .Invalid_Chunk}, .Unavailable},
+		{{kind = .Allocation_Failed}, .Unavailable},
+	}
+	for c in cases {
+		testing.expectf(t, s3_transport_error(c.failure) == c.want, "%v -> %v, want %v", c.failure.kind, s3_transport_error(c.failure), c.want)
+	}
+}
+
+// One signed request costs the header array, the line slice and one text buffer
+// for the url and every header value; the canonical request is never built.
+@(test)
+signing_one_request_allocates_little :: proc(t: ^testing.T) {
+	backing := make([]u8, 64 * 1024)
+	defer delete(backing)
+	arena: mem.Arena
+	mem.arena_init(&arena, backing)
+	tracking: mem.Tracking_Allocator
+	mem.tracking_allocator_init(&tracking, mem.arena_allocator(&arena))
+	defer mem.tracking_allocator_destroy(&tracking)
+	credentials := AWS_Credentials{"fixture-key", "fixture-secret", strings.repeat("t", 1024, context.allocator)}
+	defer delete(credentials.session_token)
+	body := "payload"
+	{
+		context.temp_allocator = mem.tracking_allocator(&tracking)
+		_, ok := s3_put_request({bucket = "examplebucket", region = "us-east-1"}, credentials, "a b/c", transmute([]u8)body, "text/plain", time.unix(1369353600, 0))
+		testing.expect(t, ok)
+	}
+	testing.expectf(t, tracking.total_allocation_count <= 4, "%d allocations", tracking.total_allocation_count)
+}
+
+@(test)
+signing_copies_the_session_token_once :: proc(t: ^testing.T) {
+	backing := make([]u8, 64 * 1024)
+	defer delete(backing)
+	arena: mem.Arena
+	mem.arena_init(&arena, backing)
+	token := strings.repeat("Q", 300, context.allocator)
+	defer delete(token)
+	credentials := AWS_Credentials{"fixture-key", "fixture-secret", token}
+	body := "payload"
+	{
+		context.temp_allocator = mem.arena_allocator(&arena)
+		request, ok := s3_put_request(S3_REQUEST_FIXTURE_CONFIG, credentials, "key", transmute([]u8)body, "text/plain", time.unix(1369353600, 0))
+		testing.expect(t, ok)
+		testing.expect_value(t, s3_request_header(request, "x-amz-security-token"), token)
+	}
+	testing.expect_value(t, strings.count(string(backing[:arena.offset]), token), 1)
 }

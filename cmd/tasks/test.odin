@@ -9,6 +9,10 @@ import "core:time"
 
 SUITE_TIMEOUT :: 300 * time.Second
 
+// Memory tracking is on in every test; with this a leak or a bad free fails the
+// test instead of only printing a warning.
+SUITE_MEMORY_FLAG :: "-define:ODIN_TEST_FAIL_ON_BAD_MEMORY=true"
+
 // The packages whose source files each need a unit test file of the same name:
 // the library in src/, and every program in cmd/<name>/. Their unit tests are in
 // tests/unit/ and tests/unit/<name>/, one <file>_test.odin for each <file>.odin.
@@ -125,14 +129,22 @@ layout_command :: proc(arguments: []string) -> int {
 test_command :: proc(arguments: []string) -> int {
 	selected := "all"
 	dependencies := shared_source()
-	flags := make([dynamic]string)
+	user := make([dynamic]string)
 	index := 0
 	options: for index < len(arguments) {
 		switch arguments[index] {
 		case "--shared":
-			dependencies = option_value(arguments, &index) or_else ""
+			value, ok := option_value(arguments, &index)
+			if !ok || value == "" {
+				return fail("--shared needs a directory")
+			}
+			dependencies = value
 		case "--package":
-			selected = option_value(arguments, &index) or_else ""
+			value, ok := option_value(arguments, &index)
+			if !ok || value == "" {
+				return fail("--package needs a directory under tests/")
+			}
+			selected = value
 		case "--":
 			index += 1
 			break options
@@ -141,33 +153,19 @@ test_command :: proc(arguments: []string) -> int {
 		}
 		index += 1
 	}
-	has_output := false
 	for flag in arguments[min(index, len(arguments)):] {
 		if strings.has_prefix(flag, "-collection:shared=") {
 			dependencies = flag[len("-collection:shared="):]
 			continue
 		}
-		has_output ||= strings.has_prefix(flag, "-out:")
-		append(&flags, flag)
+		append(&user, flag)
 	}
-	if selected == "" || dependencies == "" || !os.is_directory(dependencies) {
+	if dependencies == "" || !os.is_directory(dependencies) {
 		return fail("no shared collection at %q", dependencies)
 	}
 	root := root_directory()
 	if !os.is_directory(fmt.aprintf("%s/src", root)) {
 		return fail("no src/ in %s", root)
-	}
-	homes := homes_find(root)
-	if problems := layout_problems(root, homes); len(problems) > 0 {
-		for problem in problems {
-			fmt.eprintln(problem)
-		}
-		return 2
-	}
-
-	suites := suites_find(root, selected, homes)
-	if len(suites) == 0 {
-		return fail("no matching test suites")
 	}
 	work, created := work_directory("tests")
 	if !created {
@@ -180,6 +178,18 @@ test_command :: proc(arguments: []string) -> int {
 	repository := fmt.aprintf("%s/repository", work)
 	if !repository_stage(root, repository) {
 		return fail("cannot stage the checkout")
+	}
+	homes := homes_find(repository)
+	if problems := layout_problems(repository, homes); len(problems) > 0 {
+		for problem in problems {
+			fmt.eprintln(problem)
+		}
+		return 2
+	}
+
+	suites := suites_find(repository, selected, homes)
+	if len(suites) == 0 {
+		return fail("no matching test suites")
 	}
 	if escapes := imports_escaping(repository); len(escapes) > 0 {
 		fmt.eprintln("Relative imports leave the repository; use shared:<library> instead:")
@@ -199,10 +209,7 @@ test_command :: proc(arguments: []string) -> int {
 	}
 	fmt.printf("Library aws from %s/src; dependencies from %s\n", root, dependencies)
 
-	append(&flags, fmt.aprintf("-collection:shared=%s", shared))
-	if !has_output {
-		append(&flags, fmt.aprintf("-out:%s/tests", work))
-	}
+	flags := suite_flags(user[:], shared, fmt.aprintf("%s/tests", work))
 	for suite, number in suites {
 		target := fmt.aprintf("%s/%s", repository, suite.relative)
 		if suite.home >= 0 {
@@ -215,7 +222,7 @@ test_command :: proc(arguments: []string) -> int {
 		fmt.printf("Testing %s\n", suite.relative)
 		command := make([dynamic]string)
 		append(&command, compiler_path(), "test", target)
-		append(&command, ..flags[:])
+		append(&command, ..flags)
 		if code := run(command[:], repository, SUITE_TIMEOUT); code != 0 {
 			return code
 		}
@@ -223,16 +230,41 @@ test_command :: proc(arguments: []string) -> int {
 	return 0
 }
 
+// The flags every suite gets after the user's: the memory check, unless the user
+// set it, and an output path, unless the user gave one.
+suite_flags :: proc(user: []string, shared, output: string) -> []string {
+	flags := make([dynamic]string)
+	has_output, has_memory_flag := false, false
+	for flag in user {
+		if strings.has_prefix(flag, "-collection:shared=") {
+			continue
+		}
+		has_output ||= strings.has_prefix(flag, "-out:")
+		has_memory_flag ||= strings.has_prefix(flag, "-define:ODIN_TEST_FAIL_ON_BAD_MEMORY=")
+		append(&flags, flag)
+	}
+	append(&flags, fmt.aprintf("-collection:shared=%s", shared))
+	if !has_memory_flag {
+		append(&flags, SUITE_MEMORY_FLAG)
+	}
+	if !has_output {
+		append(&flags, fmt.aprintf("-out:%s", output))
+	}
+	return flags[:]
+}
+
 // The package of home, its support files and the suite's files, in one directory.
 suite_stage :: proc(repository, target: string, home: Home, suite: Suite) -> (directory: string, ok: bool) {
 	directory_ensure(target) or_return
+	origins := make(map[string]string)
 	for source in ([]string{home.source, fmt.aprintf("tests/support/%s", home.name), suite.relative}) {
 		for name in odin_files(fmt.aprintf("%s/%s", repository, source)) {
 			destination := fmt.aprintf("%s/%s", target, name)
-			if os.exists(destination) {
-				fmt.eprintf("tasks: %s/%s clashes with a file of the same name in %s\n", source, name, home.source)
+			if other, found := origins[name]; found {
+				fmt.eprintf("tasks: %s/%s clashes with %s/%s\n", source, name, other, name)
 				return "", false
 			}
+			origins[name] = source
 			if os.copy_file(destination, fmt.aprintf("%s/%s/%s", repository, source, name)) != nil {
 				return "", false
 			}

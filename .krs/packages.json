@@ -10,7 +10,7 @@
     },
     {
       "name": "surf",
-      "source": "local",
+      "source": "https://github.com/dvrd/surf.git",
       "tag": "v0.1.4",
       "commit": "8a3cc55b9ee42b040b55cf30bd25fcd9a2ddc714",
       "hash": "45b5f8a133a32909c32df90d8c6a9e00a2c5bd47fa07dc9b048b1fa0e53d0280"

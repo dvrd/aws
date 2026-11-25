@@ -15,9 +15,12 @@ fuzz_requests_are_well_formed_for_any_key_and_configuration :: proc(t: ^testing.
 	now := time.unix(1369353600, 0)
 	built := 0
 	for round in 0 ..< 5000 {
+		// Invalid characters are only offered to one configuration in eight, so
+		// that enough requests are still built.
+		noisy := fuzz_next(&fuzz) % 8 == 0
 		config := S3_Config {
-			bucket     = fuzz_text(&fuzz, 12, "abc.-xyz019"),
-			region     = fuzz_text(&fuzz, 10, "us-east-1cn"),
+			bucket     = fuzz_text(&fuzz, 12, "abc.-xyz019A_/" if noisy else "abc.-xyz019"),
+			region     = fuzz_text(&fuzz, 10, "us-east-1cn.A/" if noisy else "us-east-1cn"),
 			path_style = fuzz_next(&fuzz) % 2 == 0,
 		}
 		if fuzz_next(&fuzz) % 3 == 0 {
@@ -31,7 +34,18 @@ fuzz_requests_are_well_formed_for_any_key_and_configuration :: proc(t: ^testing.
 			continue
 		}
 		built += 1
-		testing.expect(t, s3_config_error(config) == "" && config.bucket != "" && key != "")
+		testing.expect(t, config.bucket != "" && key != "")
+		// The accepted-configuration rule, stated independently of s3_config_error.
+		testing.expectf(t, len(config.bucket) >= 3 && len(config.bucket) <= 63, "%q", config.bucket)
+		for character in transmute([]u8)config.bucket {
+			valid := (character >= 'a' && character <= 'z') || (character >= '0' && character <= '9') || character == '-' || character == '.'
+			testing.expectf(t, valid, "%q", config.bucket)
+		}
+		testing.expectf(t, config.region != "", "%q", config.region)
+		for character in transmute([]u8)config.region {
+			valid := (character >= 'a' && character <= 'z') || (character >= '0' && character <= '9') || character == '-'
+			testing.expectf(t, valid, "%q", config.region)
+		}
 		for text in ([]string{request.url, url}) {
 			testing.expectf(t, strings.has_prefix(text, "https://"), "%q", text)
 			for character in transmute([]u8)text {

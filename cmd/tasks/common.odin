@@ -9,6 +9,10 @@ import "core:strings"
 import "core:sys/posix"
 import "core:time"
 
+BUILD_TIMEOUT :: 120 * time.Second
+// A program the tasks build and run: the native-errors driver, the consumer.
+RUN_TIMEOUT :: 120 * time.Second
+
 compiler :: proc() -> string {
 	if value, found := os.lookup_env("ODIN", context.allocator); found && value != "" {
 		return value
@@ -67,55 +71,99 @@ root_directory :: proc() -> string {
 	return directory
 }
 
-// A collection with aws from this checkout and every other library linked from
-// the shared collection.
+// A collection with aws from this checkout and the pinned dependencies.
 stage_collection :: proc(work: string) -> (shared: string, ok: bool) {
 	shared = fmt.aprintf("%s/shared", work)
 	if os.make_directory(shared) != nil || os.symlink(fmt.aprintf("%s/src", root_directory()), fmt.aprintf("%s/aws", shared)) != nil {
 		return "", false
 	}
 	source, _ := os.get_absolute_path(shared_source(), context.allocator)
-	entries, error := os.read_all_directory_by_path(source, context.allocator)
-	if error != nil {
-		fail("no shared collection at %s", source)
+	pins, parsed := pins_read(root_directory())
+	if !parsed {
+		fail("cannot read .krs/packages.json")
 		return "", false
 	}
-	for entry in entries {
-		if entry.name == "aws" || strings.has_prefix(entry.name, ".") || !os.is_directory(entry.fullpath) {
-			continue
+	for pin in pins {
+		path := fmt.aprintf("%s/%s", source, pin.name)
+		if !os.is_directory(path) {
+			fail("shared:%s is pinned but not in %s", pin.name, source)
+			return "", false
 		}
-		if os.symlink(entry.fullpath, fmt.aprintf("%s/%s", shared, entry.name)) != nil {
+		if os.symlink(path, fmt.aprintf("%s/%s", shared, pin.name)) != nil {
 			return "", false
 		}
 	}
 	return shared, true
 }
 
+clang_major :: proc(version_text: string) -> string {
+	marker :: "clang version "
+	at := strings.index(version_text, marker)
+	if at < 0 {
+		return ""
+	}
+	digits := version_text[at + len(marker):]
+	end := 0
+	for end < len(digits) && digits[end] >= '0' && digits[end] <= '9' {
+		end += 1
+	}
+	return digits[:end]
+}
+
+// Prefer an explicit linker, then a versioned clang, then a matching system clang.
+sanitizer_clang_choose :: proc(
+	explicit, backend_major, system_major: string,
+	candidates: []string,
+	exists: proc(path: string) -> bool,
+) -> (path: string, ok: bool, message: string) {
+	if explicit != "" {
+		return explicit, true, ""
+	}
+	if backend_major == "" {
+		return "", true, ""
+	}
+	for candidate in candidates {
+		if exists(candidate) {
+			return candidate, true, ""
+		}
+	}
+	if system_major == backend_major {
+		return "", true, ""
+	}
+	return "", false, fmt.aprintf("need clang %s: install llvm@%s or set ODIN_CLANG_PATH", backend_major, backend_major)
+}
+
 // Sanitized builds link the address sanitizer runtime of the clang that does the
 // linking, which must match the LLVM Odin was built with. Unless ODIN_CLANG_PATH
 // is already set, prefer a clang of that major version installed beside the
 // system one.
-sanitizer_clang_select :: proc() {
-	if value, found := os.lookup_env("ODIN_CLANG_PATH", context.allocator); found && value != "" {
-		return
-	}
-	report, code := output({compiler(), "report"})
+sanitizer_clang_select :: proc() -> (ok: bool) {
+	explicit, _ := os.lookup_env("ODIN_CLANG_PATH", context.allocator)
+	report, report_code := output({compiler(), "report"})
 	marker :: "Backend: LLVM "
-	at := strings.index(report, marker)
-	if code != 0 || at < 0 {
-		return
-	}
-	major := report[at + len(marker):]
-	if dot := strings.index_any(major, ".\n "); dot >= 0 {
-		major = major[:dot]
-	}
-	for pattern in ([]string{"/opt/homebrew/opt/llvm@%s/bin/clang", "/usr/local/opt/llvm@%s/bin/clang", "/usr/lib/llvm-%s/bin/clang"}) {
-		candidate := fmt.aprintf(pattern, major)
-		if major != "" && os.is_file(candidate) {
-			os.set_env("ODIN_CLANG_PATH", candidate)
-			return
+	major := ""
+	if at := strings.index(report, marker); report_code == 0 && at >= 0 {
+		major = report[at + len(marker):]
+		if dot := strings.index_any(major, ".\n "); dot >= 0 {
+			major = major[:dot]
 		}
 	}
+	candidates := []string{
+		fmt.aprintf("/opt/homebrew/opt/llvm@%s/bin/clang", major),
+		fmt.aprintf("/usr/local/opt/llvm@%s/bin/clang", major),
+		fmt.aprintf("/usr/lib/llvm-%s/bin/clang", major),
+	}
+	version, version_code := output({"clang", "--version"})
+	system_major := clang_major(version) if version_code == 0 else ""
+	path, chosen, message := sanitizer_clang_choose(explicit, major, system_major, candidates, os.is_file)
+	if !chosen {
+		fail("%s", message)
+		return false
+	}
+	if path != "" {
+		os.set_env("ODIN_CLANG_PATH", path)
+	}
+	return true
 }
 
 // One child process in its own session, so a deadline can end everything it
@@ -131,7 +179,9 @@ Spawn :: struct {
 }
 
 Child :: struct {
-	pid: posix.pid_t,
+	pid:    posix.pid_t,
+	reaped: bool,
+	status: c.int, // valid when reaped
 }
 
 spawn :: proc(options: Spawn) -> (child: Child, ok: bool) {
@@ -153,9 +203,6 @@ spawn :: proc(options: Spawn) -> (child: Child, ok: bool) {
 		stderr = posix.open(strings.clone_to_cstring(options.errors), {.WRONLY, .CREAT, .TRUNC}, {.IRUSR, .IWUSR})
 	}
 	pid := posix.fork()
-	if pid < 0 {
-		return {}, false
-	}
 	if pid == 0 {
 		// Only system calls from here.
 		posix.setsid()
@@ -188,17 +235,20 @@ spawn :: proc(options: Spawn) -> (child: Child, ok: bool) {
 	if stderr >= 0 {
 		posix.close(stderr)
 	}
-	return {pid}, true
+	if pid < 0 {
+		return {}, false
+	}
+	return {pid = pid}, true
 }
 
 // The exit code of child, or finished == false after it outlived timeout and was
 // killed with its whole session. A zero timeout waits without limit.
-wait :: proc(child: Child, timeout: time.Duration = 0) -> (code: int, finished: bool) {
+wait :: proc(child: ^Child, timeout: time.Duration = 0) -> (code: int, finished: bool) {
 	started := time.tick_now()
-	status: c.int
-	for {
-		result := posix.waitpid(child.pid, &status, {.NOHANG} if timeout > 0 else {})
+	for !child.reaped {
+		result := posix.waitpid(child.pid, &child.status, {.NOHANG} if timeout > 0 else {})
 		if result == child.pid {
+			child.reaped = true
 			break
 		}
 		if result < 0 && posix.errno() != .EINTR {
@@ -210,23 +260,43 @@ wait :: proc(child: Child, timeout: time.Duration = 0) -> (code: int, finished: 
 		}
 		time.sleep(5 * time.Millisecond)
 	}
-	if posix.WIFEXITED(status) {
-		return int(posix.WEXITSTATUS(status)), true
+	if posix.WIFEXITED(child.status) {
+		return int(posix.WEXITSTATUS(child.status)), true
 	}
-	return 128 + int(posix.WTERMSIG(status)), true
+	return 128 + int(posix.WTERMSIG(child.status)), true
 }
 
-alive :: proc(child: Child) -> bool {
-	return posix.kill(child.pid, .NONE) == .OK
+alive :: proc(child: ^Child) -> bool {
+	for !child.reaped {
+		result := posix.waitpid(child.pid, &child.status, {.NOHANG})
+		if result < 0 && posix.errno() == .EINTR {
+			continue
+		}
+		child.reaped = result == child.pid
+		return result == 0
+	}
+	return false
 }
 
-// Ends the child's session and reaps it.
-stop :: proc(child: Child) {
-	status: c.int
+// Ends the child and the session it started, and reaps it. The child is signalled
+// first because it may not have called setsid yet.
+stop :: proc(child: ^Child) {
+	if child.reaped {
+		return
+	}
+	posix.kill(child.pid, .SIGTERM)
 	posix.killpg(child.pid, .SIGTERM)
 	time.sleep(50 * time.Millisecond)
+	posix.kill(child.pid, .SIGKILL)
 	posix.killpg(child.pid, .SIGKILL)
-	posix.waitpid(child.pid, &status, {})
+	for {
+		result := posix.waitpid(child.pid, &child.status, {})
+		if result < 0 && posix.errno() == .EINTR {
+			continue
+		}
+		child.reaped = result == child.pid
+		break
+	}
 }
 
 // Runs a command with this process's output and returns its exit code; 124 means
@@ -236,7 +306,7 @@ run :: proc(command: []string, directory := "", timeout: time.Duration = 0) -> i
 	if !started {
 		return fail("cannot start %s", command[0])
 	}
-	code, finished := wait(child, timeout)
+	code, finished := wait(&child, timeout)
 	if !finished {
 		fmt.eprintf("tasks: %s did not finish in %v\n", command[0], timeout)
 		return 124

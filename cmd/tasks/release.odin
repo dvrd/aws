@@ -12,6 +12,10 @@ import "core:strings"
 //   feat: or feat(scope):                   minor
 //   anything else                           patch
 //
+// Before v1 the API may still change, so a breaking change bumps the minor
+// version and nothing is ever bumped to v1 by the commits. v1.0.0 is published
+// only when asked for with --stable; after that the table above applies as is.
+//
 // The tag is annotated with those subjects. Consumers pin it with
 // "krs update aws@<tag>". Releases are cut from a clean main only.
 Version :: struct {
@@ -123,14 +127,49 @@ version_next :: proc(version: Version, bump: Bump) -> Version {
 	return version
 }
 
+// The bump a release applies. Before v1 a breaking change is held to minor, and
+// stable (the explicit decision to publish v1.0.0) is the only way to v1.
+release_bump :: proc(latest: Version, bump: Bump, stable: bool) -> Bump {
+	if latest.major > 0 {
+		return bump
+	}
+	if stable {
+		return .Major
+	}
+	return .Minor if bump == .Major else bump
+}
+
 Plan :: struct {
 	previous: string, // "" before the first release
 	next:     string,
-	bump:     Bump,
+	bump:     Bump, // what the commits ask for
+	applied:  Bump, // what the release applies
+	stable:   bool, // this release is the decision to publish v1.0.0
+	latest:   Version,
 	subjects: []string,
 }
 
-release_plan :: proc() -> (plan: Plan, ok: bool) {
+plan_valid :: proc(plan: Plan) -> bool {
+	if plan.stable && plan.latest.major > 0 {
+		fail("--stable publishes v1.0.0, and %s is already past it", plan.previous)
+		return false
+	}
+	return true
+}
+
+// --stable publishes v1.0.0. It is refused once the library is past v1.
+stable_option :: proc(arguments: []string) -> (stable: bool, ok: bool) {
+	for argument in arguments {
+		if argument != "--stable" {
+			fail("unknown option: %s", argument)
+			return false, false
+		}
+		stable = true
+	}
+	return stable, true
+}
+
+release_plan :: proc(stable := false) -> (plan: Plan, ok: bool) {
 	tags, code := output({"git", "tag", "--merged", "HEAD"})
 	if code != 0 {
 		return {}, false
@@ -156,14 +195,17 @@ release_plan :: proc() -> (plan: Plan, ok: bool) {
 	}
 	plan.subjects = listed[:]
 	plan.bump = bump_of(plan.subjects, bodies)
-	next := version_next(latest, plan.bump)
+	plan.stable = stable
+	plan.latest = latest
+	plan.applied = release_bump(latest, plan.bump, stable)
+	next := version_next(latest, plan.applied)
 	plan.next = fmt.aprintf("v%d.%d.%d", next.major, next.minor, next.patch)
 	return plan, true
 }
 
 // Prints the plan. False when there is nothing to release.
 plan_print :: proc(plan: Plan) -> bool {
-	if len(plan.subjects) == 0 {
+	if len(plan.subjects) == 0 && !plan.stable {
 		fmt.printf("%s is the current release; nothing has been committed since.\n", plan.previous)
 		return false
 	}
@@ -172,11 +214,17 @@ plan_print :: proc(plan: Plan) -> bool {
 		.Minor = "minor",
 		.Major = "major",
 	}
+	reason := names[plan.applied]
+	if plan.stable {
+		reason = "stable, published on request"
+	} else if plan.applied != plan.bump {
+		reason = "minor: breaking changes bump the minor version before v1"
+	}
 	fmt.printf(
 		"Last release: %s\nNext release: %s (%s, %d commit(s))\n",
 		plan.previous if plan.previous != "" else "none",
 		plan.next,
-		names[plan.bump],
+		reason,
 		len(plan.subjects),
 	)
 	for subject in plan.subjects {
@@ -186,15 +234,26 @@ plan_print :: proc(plan: Plan) -> bool {
 }
 
 version_command :: proc(arguments: []string) -> int {
-	plan, planned := release_plan()
+	stable, parsed := stable_option(arguments)
+	if !parsed {
+		return 64
+	}
+	plan, planned := release_plan(stable)
 	if !planned {
 		return fail("cannot read the Git history")
+	}
+	if !plan_valid(plan) {
+		return 1
 	}
 	plan_print(plan)
 	return 0
 }
 
 release_command :: proc(arguments: []string) -> int {
+	stable, parsed := stable_option(arguments)
+	if !parsed {
+		return 64
+	}
 	branch, _ := output({"git", "branch", "--show-current"})
 	if strings.trim_space(branch) != "main" {
 		return fail("releases are tagged on main")
@@ -203,11 +262,14 @@ release_command :: proc(arguments: []string) -> int {
 	if strings.trim_space(changes) != "" {
 		return fail("commit or stash every change before releasing")
 	}
-	plan, planned := release_plan()
+	plan, planned := release_plan(stable)
 	if !planned {
 		return fail("cannot read the Git history")
 	}
-	if len(plan.subjects) == 0 {
+	if !plan_valid(plan) {
+		return 1
+	}
+	if len(plan.subjects) == 0 && !stable {
 		plan_print(plan)
 		return 0
 	}

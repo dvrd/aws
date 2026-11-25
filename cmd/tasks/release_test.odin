@@ -55,3 +55,22 @@ relative_imports_are_recognised :: proc(t: ^testing.T) {
 	_, found = import_relative(`text := "../not an import"`)
 	testing.expect(t, !found)
 }
+
+@(test)
+nothing_reaches_v1_until_it_is_asked_for :: proc(t: ^testing.T) {
+	// Before v1 a breaking change is held to minor; the rest is unchanged.
+	testing.expect_value(t, release_bump({0, 2, 0}, .Major, false), Bump.Minor)
+	testing.expect_value(t, release_bump({0, 2, 0}, .Minor, false), Bump.Minor)
+	testing.expect_value(t, release_bump({0, 2, 0}, .Patch, false), Bump.Patch)
+	testing.expect_value(t, version_next({0, 2, 0}, release_bump({0, 2, 0}, .Major, false)), Version{0, 3, 0})
+	// Asking for it publishes v1.0.0 whatever the commits say.
+	for bump in Bump {
+		testing.expect_value(t, version_next({0, 9, 4}, release_bump({0, 9, 4}, bump, true)), Version{1, 0, 0})
+	}
+	// After v1 the commits decide, a breaking change included.
+	testing.expect_value(t, release_bump({1, 4, 2}, .Major, false), Bump.Major)
+	testing.expect_value(t, release_bump({1, 4, 2}, .Minor, false), Bump.Minor)
+	testing.expect_value(t, release_bump({1, 4, 2}, .Patch, false), Bump.Patch)
+	testing.expect(t, !plan_valid({stable = true, latest = {1, 0, 0}, previous = "v1.0.0"}))
+	testing.expect(t, plan_valid({stable = true, latest = {0, 3, 0}, previous = "v0.3.0"}))
+}

@@ -10,6 +10,7 @@ import "core:os"
 import "core:strings"
 import "core:sync"
 import "core:time"
+import tls "shared:async/tls"
 import "shared:surf"
 
 // Without an endpoint the request goes to AWS: https://<bucket>.s3.<region>...,
@@ -351,7 +352,9 @@ s3_object_request_at :: proc(
 		},
 	)
 	error := s3_status_error(result.status)
-	if error == .None && !result.ok {
+	if result.status == 0 {
+		error = s3_transport_error(result.error)
+	} else if error == .None && !result.ok {
 		error = .Unavailable
 	}
 	effect := S3_Write_Effect.Response_Received
@@ -877,10 +880,10 @@ s3_get_native_config :: proc(
 // s3_status_error.
 S3_Error :: enum u8 {
 	None,
-	Invalid_Input, // bad config/credentials/key/bound or an unreadable local file; nothing was sent
+	Invalid_Input, // bad config/credentials/key/bound, an unreadable local file, or a request the transport refused before sending; nothing was sent
 	Not_Found, // 404: no object under the key (or no such bucket)
 	Too_Large, // a 2xx object is above bytes_max; no bytes are returned
-	Rejected, // nonretryable status, including redirects and other 4xx
+	Rejected, // nonretryable status, including redirects and other 4xx, or a server certificate or redirect the client refuses
 	Unavailable, // no answer, a timeout, 408/429/5xx: retry later
 }
 
@@ -898,6 +901,70 @@ s3_status_error :: proc(status: int) -> S3_Error {
 		return .Unavailable
 	}
 	return .Rejected
+}
+
+// The error for a request that got no usable HTTP answer. The switch is complete
+// on purpose: a new Surf error kind fails to compile until it is classified.
+@(private)
+s3_transport_error :: proc(failure: surf.HTTP_Error) -> S3_Error {
+	switch failure.kind {
+	case .Invalid_URL,
+	     .Insecure_URL,
+	     .Invalid_Config,
+	     .Invalid_Method,
+	     .Invalid_Header,
+	     .Reserved_Header,
+	     .Address_Rejected:
+		return .Invalid_Input
+	case .Redirect_Limit, .Invalid_Redirect, .Unsafe_Redirect:
+		return .Rejected
+	case .Body_Oversized:
+		return .Too_Large
+	case .TLS_Failed:
+		if general, is_general := failure.tls_error.(tls.General_Error); is_general {
+			#partial switch general {
+			case .Invalid_SNI_Hostname, .Invalid_Config, .Invalid_Trust_Roots, .Credential_Failed:
+				return .Invalid_Input
+			}
+		}
+		if protocol, is_protocol := failure.tls_error.(tls.Protocol_Error); is_protocol {
+			#partial switch protocol {
+			case .Bad_Certificate,
+			     .Unsupported_Certificate,
+			     .Certificate_Revoked,
+			     .Certificate_Expired,
+			     .Certificate_Unknown,
+			     .Unknown_Ca,
+			     .Protocol_Version,
+			     .Insufficient_Security:
+				return .Rejected
+			}
+		}
+		return .Unavailable
+	case .None,
+	     .Header_Incomplete,
+	     .Header_Oversized,
+	     .Header_Limit,
+	     .Invalid_Status,
+	     .Conflicting_Framing,
+	     .Unsupported_Transfer_Encoding,
+	     .Invalid_Content_Length,
+	     .Invalid_Chunk,
+	     .Invalid_Trailer,
+	     .Unexpected_EOF,
+	     .No_Progress,
+	     .Destination_Undersized,
+	     .Overlapping_Buffers,
+	     .Allocation_Failed,
+	     .Dial_Failed,
+	     .IO_Failed,
+	     .Deadline_Failed,
+	     .Too_Many_Informational,
+	     .Unsupported_Content_Encoding,
+	     .Content_Decoding_Failed:
+		return .Unavailable
+	}
+	return .Unavailable
 }
 
 // Per-operation executor for s3_get. On an error status whose body exceeds
@@ -1010,21 +1077,38 @@ s3_get_native :: proc(
 		allocator,
 	)
 	defer surf.response_destroy(&response)
-	if http_error.kind == .Body_Oversized {
-		return nil, http_error.status, .Too_Large
-	}
 	if http_error.kind != .None {
-		return nil, http_error.status, .Unavailable
+		return nil, http_error.status, s3_transport_error(http_error)
 	}
 	if len(response.body) > bytes_max {
 		return nil, response.status, .Too_Large
 	}
-	copied, allocation_error := make([]u8, len(response.body), allocator)
-	if allocation_error != nil {
+	taken, taken_ok := s3_get_body_take(&response, allocator)
+	if !taken_ok {
 		return nil, response.status, .Unavailable
 	}
+	return taken, response.status, .None
+}
+
+// Gives the caller a body it frees with delete(body, allocator). Surf allocated
+// the body with allocator (no budget scope is configured), so a non-empty body
+// Surf can hand over is taken outright; the slice starts at the allocation, so
+// that delete frees it. An empty body or one Surf cannot hand over is copied.
+// response must still be destroyed afterwards; ok is false when the copy fails.
+@(private)
+s3_get_body_take :: proc(response: ^surf.Response, allocator: mem.Allocator) -> (body: []u8, ok: bool) {
+	if len(response.body) > 0 {
+		chunk, take_error := surf.response_take_body(response)
+		if take_error.kind == .None {
+			return chunk.storage[:len(chunk.data)], true
+		}
+	}
+	copied, allocation_error := make([]u8, len(response.body), allocator)
+	if allocation_error != nil {
+		return nil, false
+	}
 	copy(copied, response.body)
-	return copied, response.status, .None
+	return copied, true
 }
 
 // Surf's request header type, named through its API so aws needs no http import.

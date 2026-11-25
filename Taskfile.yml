@@ -100,9 +100,12 @@ tasks:
 
   version:
     desc: Show the last released version and the one the next release would get
+    summary: |
+      task version
+      task version -- --stable   # what publishing v1.0.0 would look like
     deps: [tasks]
     cmds:
-      - build/tasks version
+      - build/tasks version {{.CLI_ARGS}}
 
   release:
     desc: Check, then tag HEAD with the next semantic version
@@ -113,11 +116,16 @@ tasks:
         feat: or feat(scope):                   minor
         anything else                           patch
 
+      Before v1 a breaking change bumps the minor version, and the commits never
+      bump to v1. Publishing v1.0.0 is a decision made by asking for it:
+
+        task release -- --stable
+
       The tag is annotated with those subjects. Consumers pin it with
       "krs update aws@<tag>". Releases are cut from a clean main only.
     deps: [tasks]
     cmds:
-      - build/tasks release
+      - build/tasks release {{.CLI_ARGS}}
 
   tasks:
     desc: Build the task runner

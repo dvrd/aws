@@ -1,6 +1,6 @@
 # Generated build output
-build/
-.task/
+
+# files
 *.o
 *.obj
 *.exe
@@ -9,8 +9,12 @@ build/
 *.dylib
 *.so
 *.so.*
-*.dSYM/
+
+# directories
 .DS_Store
+.task/
+*.dSYM/
+build/
 node_modules/
 
 # Local credentials and runtime state

@@ -45,8 +45,18 @@ COMMANDS := [?]Command {
 		"native-errors [--report FILE]",
 		"Check S3 error handling against an owned TLS peer.",
 	},
-	{"version", version_command, "version", "Show the last released version and the one the next release would get."},
-	{"release", release_command, "release", "Check, then tag HEAD with the next semantic version."},
+	{
+		"version",
+		version_command,
+		"version [--stable]",
+		"Show the last released version and the one the next release would get.",
+	},
+	{
+		"release",
+		release_command,
+		"release [--stable]",
+		"Check, then tag HEAD with the next semantic version. --stable publishes v1.0.0.",
+	},
 }
 
 main :: proc() {

@@ -2,7 +2,7 @@
 //
 // Usage: <driver> --probe <probe-binary> [--report <path>], run from the repository
 // root. Each case serves one TLS 1.3 connection to the probe built from
-// tests/testdata/native_error_loopback and checks what both sides observed.
+// tests/e2e/native_errors/probe and checks what both sides observed.
 package main
 
 import "core:bytes"
@@ -23,9 +23,9 @@ KEY :: "public-fixture-key"
 TOKEN :: "public-fixture-session"
 BODY :: "public-fixture-body"
 TARGET :: "/fixturebucket/qualification/owned.txt"
-CERTIFICATE :: "tests/testdata/tls/localhost.pem"
-PRIVATE_KEY :: "tests/testdata/tls/rsa2048.pem"
-WRONG_ROOT :: "tests/testdata/tls/root.pem"
+CERTIFICATE :: "tests/e2e/native_errors/tls/localhost.pem"
+PRIVATE_KEY :: "tests/e2e/native_errors/tls/rsa2048.pem"
+WRONG_ROOT :: "tests/e2e/native_errors/tls/root.pem"
 ERROR_SOURCE :: "https://docs.aws.amazon.com/AmazonS3/latest/API/API_Error.html"
 
 HEAD_MAX :: 16384

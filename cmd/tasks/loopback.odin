@@ -10,6 +10,13 @@ import "core:time"
 SANITIZED_FLAGS :: []string{"-thread-count:1", "-vet", "-warnings-as-errors", "-sanitize:address"}
 BUILD_TIMEOUT :: 120 * time.Second
 
+LOOPBACK_PEER :: "tests/e2e/loopback/peer"
+LOOPBACK_DEFAULT_PROBE :: "tests/e2e/loopback/production_get_probe"
+LOOPBACK_OBSERVER_PROBE :: "tests/e2e/loopback/observer_probe"
+// The observer probe is compiled together with the observation the live
+// qualification probe reports.
+LOOPBACK_OBSERVATION :: "tests/qualification/probe/get_observation.odin"
+
 // Observes the native S3 GET against an owned loopback peer that accepts one
 // connection and reads the TLS ClientHello. No provider, no credentials. With no
 // --mode both probes run; a report is written only on request.
@@ -44,7 +51,6 @@ loopback_command :: proc(arguments: []string) -> int {
 }
 
 loopback_run :: proc(mode, report: string) -> int {
-	here :: "tests/live_qualification"
 	work, created := work_directory("tls-observation")
 	if !created {
 		return fail("cannot create a work directory")
@@ -55,14 +61,14 @@ loopback_run :: proc(mode, report: string) -> int {
 		return fail("cannot stage the shared collection")
 	}
 	odin := compiler_path()
-	observation := fmt.aprintf("%s/get_observation.odin", here)
-	source := fmt.aprintf("%s/production_get_probe", here)
+	observation := LOOPBACK_OBSERVATION
+	source := LOOPBACK_DEFAULT_PROBE
 	if mode == "observer" {
 		// The observer probe is compiled together with the observation it reports.
 		source = fmt.aprintf("%s/source", work)
 		if os.make_directory(source) != nil ||
 		   os.copy_file(fmt.aprintf("%s/get_observation.odin", source), observation) != nil ||
-		   os.copy_file(fmt.aprintf("%s/main.odin", source), fmt.aprintf("%s/observer_probe/main.odin", here)) != nil {
+		   os.copy_file(fmt.aprintf("%s/main.odin", source), fmt.aprintf("%s/main.odin", LOOPBACK_OBSERVER_PROBE)) != nil {
 			return fail("cannot stage the observer probe")
 		}
 	}
@@ -74,7 +80,7 @@ loopback_run :: proc(mode, report: string) -> int {
 	append(&compile, ..SANITIZED_FLAGS)
 	append(&compile, fmt.aprintf("-out:%s", probe))
 	peer_compile := make([dynamic]string)
-	append(&peer_compile, odin, "build", "tests/testdata/tls_observer")
+	append(&peer_compile, odin, "build", LOOPBACK_PEER)
 	append(&peer_compile, ..SANITIZED_FLAGS)
 	append(&peer_compile, fmt.aprintf("-out:%s", peer))
 	for build in ([][]string{compile[:], peer_compile[:]}) {

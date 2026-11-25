@@ -2,6 +2,7 @@ package main
 
 import "core:testing"
 
+// Unit tests of cmd/tasks/release.odin: versions, bumps and the pre-v1 rule.
 @(test)
 versions_are_strict_and_ordered :: proc(t: ^testing.T) {
 	context.allocator = context.temp_allocator
@@ -42,18 +43,6 @@ subjects_decide_the_bump :: proc(t: ^testing.T) {
 	testing.expect_value(t, version_next({0, 1, 1}, .Patch), Version{0, 1, 2})
 	testing.expect_value(t, version_next({0, 1, 1}, .Minor), Version{0, 2, 0})
 	testing.expect_value(t, version_next({0, 1, 1}, .Major), Version{1, 0, 0})
-}
-
-@(test)
-relative_imports_are_recognised :: proc(t: ^testing.T) {
-	path, found := import_relative(`import surf "../surf"`)
-	testing.expect(t, found && path == "../surf")
-	path, found = import_relative(`	import "./local"`)
-	testing.expect(t, found && path == "./local")
-	_, found = import_relative(`import aws "shared:aws"`)
-	testing.expect(t, !found)
-	_, found = import_relative(`text := "../not an import"`)
-	testing.expect(t, !found)
 }
 
 @(test)

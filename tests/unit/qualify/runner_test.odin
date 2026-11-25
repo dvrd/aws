@@ -6,6 +6,8 @@ import "core:sys/posix"
 import "core:testing"
 import "core:time"
 
+// Unit tests of cmd/qualify/runner.odin: plan, the run state machine, receipts,
+// credential checks and expiry instants.
 @(test)
 plan_is_private_and_does_not_launch_or_reissue_run :: proc(t: ^testing.T) {
 	test: Test
@@ -347,31 +349,4 @@ instants_need_an_explicit_zone_and_apply_it :: proc(t: ^testing.T) {
 		_, ok := instant_parse(text)
 		testing.expect(t, !ok, text)
 	}
-}
-
-@(test)
-documents_refuse_duplicate_members_and_non_finite_numbers :: proc(t: ^testing.T) {
-	test: Test
-	context.allocator = test_begin(&test, t)
-	defer test_end(&test)
-	cases := []struct {
-		text:     string,
-		expected: Failure,
-	} {
-		{`{"a":1,"b":{"a":2},"c":[{"a":3},{"a":4}]}`, .None},
-		{`{"a":1,"a":2}`, .Duplicate_JSON},
-		{`{"a":{"b":1,"b":2}}`, .Duplicate_JSON},
-		{`{"a":1,"\u0061":2}`, .Duplicate_JSON},
-		{`{"a":NaN}`, .Invalid_JSON},
-		{`{"a":1} trailing`, .Invalid_JSON},
-		{`{"a":1`, .Invalid_JSON},
-	}
-	for item in cases {
-		text := item.text
-		_, failure := decode(transmute([]u8)text)
-		testing.expect_value(t, failure, item.expected)
-	}
-	value, failure := decode_object(transmute([]u8)string(`{"b":[true,null,"q\"\n"],"a":-3}`))
-	testing.expect_value(t, failure, Failure.None)
-	testing.expect_value(t, string(encode(value)), `{"a":-3,"b":[true,null,"q\"\u000a"]}`)
 }

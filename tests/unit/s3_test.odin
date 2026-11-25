@@ -1177,3 +1177,13 @@ s3_put_file_hashes_files_larger_than_its_buffer :: proc(t: ^testing.T) {
 	testing.expect_value(t, s3_validation_count.calls, 0)
 	testing.expect_value(t, s3_observer_record.calls, 1)
 }
+
+@(test)
+request_builders_refuse_a_token_with_a_space :: proc(t: ^testing.T) {
+	config := S3_Config{bucket = "examplebucket", region = "us-east-1"}
+	credentials := AWS_Credentials{"fixture-key", "fixture-secret", "fixture-token "}
+	_, get_ok := s3_get_request(config, credentials, "key")
+	testing.expect(t, !get_ok)
+	_, put_ok := s3_put_request(config, credentials, "key", nil, "text/plain")
+	testing.expect(t, !put_ok)
+}

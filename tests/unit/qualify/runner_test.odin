@@ -2,6 +2,7 @@ package main
 
 import aws "shared:aws"
 import "core:encoding/json"
+import "core:os"
 import "core:reflect"
 import "core:strings"
 import "core:sys/posix"
@@ -30,7 +31,21 @@ plan_is_private_and_does_not_launch_or_reissue_run :: proc(t: ^testing.T) {
 }
 
 @(test)
-scope_refuses_business_resource_paths_and_missing_guards :: proc(t: ^testing.T) {
+the_documented_example_resource_plan_is_accepted :: proc(t: ^testing.T) {
+	test: Test
+	context.allocator = test_begin(&test, t)
+	defer test_end(&test)
+	fixture(&test)
+	test.runner.capture = capture_forbidden
+	text, error := os.read_entire_file("docs/qualification.example.json", context.allocator)
+	testing.expect(t, error == nil)
+	write_file(test.runner.arguments.resource_plan, string(text))
+	value := planned(&test)
+	testing.expect_value(t, phase_of(value), "PREPARED")
+}
+
+@(test)
+scope_refuses_business_resource_paths_and_missing_guards ::proc(t: ^testing.T) {
 	test: Test
 	context.allocator = test_begin(&test, t)
 	defer test_end(&test)

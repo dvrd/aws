@@ -1,0 +1,11 @@
+{
+  "schema": 1,
+  "phase": "READY",
+  "bucket": "webtools-qualification-example",
+  "region": "us-east-1",
+  "prefix": "qualification/00000000000000000000000000000000/",
+  "profile": "qualification",
+  "expected_account": "123456789012",
+  "public_access_block_verified": true,
+  "encryption": "AES256"
+}

@@ -1,5 +1,6 @@
 package aws
 
+import "core:crypto/hash"
 import "core:encoding/json"
 import "core:fmt"
 import "core:strings"
@@ -94,6 +95,9 @@ ses_send :: proc(
 	host := fmt.tprintf("email.%s.amazonaws.com", config.region)
 	path := "/v2/email/outbound-emails"
 	headers := ses_headers(config.region, credentials, host, s3_timestamp(signing_time(now)), payload)
+	if headers == nil {
+		return .Allocation_Failed
+	}
 	data, result := http_execute(
 		{method = "POST", url = fmt.tprintf("https://%s%s", host, path), body = payload, headers = headers, timeout_ms = 15000},
 	)
@@ -116,36 +120,72 @@ ses_send :: proc(
 	return .None
 }
 
+// The signed header lines of one SES send, in the order they are sent:
+// Content-Type, x-amz-date, an optional x-amz-security-token and Authorization.
+// The lines share one buffer in context.temp_allocator; nil when it cannot be had.
 ses_headers :: proc(region: string, credentials: AWS_Credentials, host, stamp: string, payload: []u8) -> []string {
-	canonical_headers := fmt.tprintf("content-type:application/json\nhost:%s\nx-amz-date:%s\n", host, stamp)
-	signed := "content-type;host;x-amz-date"
-	headers := make([dynamic]string, 0, 5, context.temp_allocator)
-	append(&headers, "Content-Type: application/json", fmt.tprintf("x-amz-date: %s", stamp))
+	token := credentials.session_token
+	digest: [32]u8
+	hash.hash(.SHA256, payload, digest[:])
+	payload_hash: [64]u8
+	sigv4_hex(digest[:], payload_hash[:])
+	signed_headers := [4]Sigv4_Header {
+		{"content-type", "application/json"},
+		{"host", host},
+		{"x-amz-date", stamp},
+		{"x-amz-security-token", token},
+	}
+	signed := "content-type;host;x-amz-date;x-amz-security-token"
+	count := 4
+	if token == "" {
+		signed = signed[:len("content-type;host;x-amz-date")]
+		count = 3
+	}
+	signature: [64]u8
+	sigv4_sign(
+		credentials.secret_key,
+		{
+			service = "ses",
+			region = region,
+			method = "POST",
+			path = "/v2/email/outbound-emails",
+			headers = signed_headers[:count],
+			payload_hash = string(payload_hash[:]),
+			stamp = stamp,
+		},
+		&signature,
+	)
 
-	if credentials.session_token != "" {
-		canonical_headers = fmt.tprintf("%sx-amz-security-token:%s\n", canonical_headers, credentials.session_token)
-		signed = fmt.tprintf("%s;x-amz-security-token", signed)
-		append(&headers, fmt.tprintf("x-amz-security-token: %s", credentials.session_token))
+	size := len("x-amz-date: ") + len(stamp) + sigv4_authorization_size(credentials.access_key, region, "ses", signed)
+	if token != "" {
+		size += len("x-amz-security-token: ") + len(token)
+	}
+	builder, builder_error := strings.builder_make_len_cap(0, size, context.temp_allocator)
+	if builder_error != nil {
+		return nil
+	}
+	headers, headers_error := make([]string, count, context.temp_allocator)
+	if headers_error != nil {
+		return nil
+	}
+	// Lines are cut from the buffer once it is complete, so growth cannot move them.
+	ends: [4]int
+	strings.write_string(&builder, "x-amz-date: ")
+	strings.write_string(&builder, stamp)
+	ends[1] = strings.builder_len(builder)
+	if token != "" {
+		strings.write_string(&builder, "x-amz-security-token: ")
+		strings.write_string(&builder, token)
+		ends[2] = strings.builder_len(builder)
+	}
+	sigv4_authorization_write(&builder, credentials.access_key, stamp, region, "ses", signed, &signature)
+	ends[count - 1] = strings.builder_len(builder)
+
+	text := strings.to_string(builder)
+	headers[0] = "Content-Type: application/json"
+	for i in 1 ..< count {
+		headers[i] = text[ends[i - 1] if i > 1 else 0:ends[i]]
 	}
 
-	canonical := fmt.tprintf(
-		"POST\n/v2/email/outbound-emails\n\n%s\n%s\n%s",
-		canonical_headers,
-		signed,
-		s3_sha256(payload),
-	)
-	scope := fmt.tprintf("%s/%s/ses/aws4_request", stamp[:8], region)
-	signature := s3_signature(credentials.secret_key, region, stamp, scope, canonical, "ses")
-	append(
-		&headers,
-		fmt.tprintf(
-			"Authorization: AWS4-HMAC-SHA256 Credential=%s/%s, SignedHeaders=%s, Signature=%s",
-			credentials.access_key,
-			scope,
-			signed,
-			signature,
-		),
-	)
-
-	return headers[:]
+	return headers
 }

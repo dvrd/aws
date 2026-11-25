@@ -158,7 +158,7 @@ plan_valid :: proc(plan: Plan) -> bool {
 }
 
 Release_Options :: struct {
-	stable, allow_drift: bool,
+	stable, allow_drift, push: bool,
 }
 
 release_options :: proc(arguments: []string) -> (options: Release_Options, ok: bool) {
@@ -166,6 +166,8 @@ release_options :: proc(arguments: []string) -> (options: Release_Options, ok: b
 		switch argument {
 		case "--stable":
 			options.stable = true
+		case "--push":
+			options.push = true
 		case "--allow-drift":
 			options.allow_drift = true
 		case:
@@ -296,6 +298,9 @@ release_command :: proc(arguments: []string) -> int {
 		if code := deps_command({"--strict"}); code != 0 {
 			return fail("the shared collection differs from .krs/packages.json; release against the pins or pass --allow-drift")
 		}
+		if code := odin_command({"--strict"}); code != 0 {
+			return fail("the compiler differs from ODIN_COMMIT; rebuild it, run task odin:pin, or pass --allow-drift")
+		}
 	}
 	if code := check_command(nil); code != 0 {
 		return code
@@ -315,10 +320,24 @@ release_command :: proc(arguments: []string) -> int {
 	if os.write_entire_file(file, strings.to_string(message)) != nil {
 		return fail("cannot write the tag message")
 	}
+	if options.push {
+		local, local_code := output({"git", "rev-parse", "HEAD"})
+		remote, code := output({"git", "rev-parse", "@{upstream}"})
+		if local_code != 0 || code != 0 || strings.trim_space(local) != strings.trim_space(remote) {
+			return fail("push main to its upstream before publishing a release")
+		}
+	}
 	if code := run({"git", "tag", "-a", plan.next, "-F", file}); code != 0 {
 		return code
 	}
 	head, _ := output({"git", "rev-parse", "--short", "HEAD"})
 	fmt.printf("Tagged %s at %s. Consumers: krs update aws@%s\n", plan.next, strings.trim_space(head), plan.next)
+	if options.push {
+		if code := run({"git", "push", "origin", fmt.tprintf("refs/tags/%s", plan.next)}); code != 0 {
+			return fail("tagged %s locally, but the push failed; retry with git push origin %s", plan.next, plan.next)
+		}
+	} else {
+		fmt.printf("Not published: run git push origin %s to make it installable elsewhere.\n", plan.next)
+	}
 	return 0
 }

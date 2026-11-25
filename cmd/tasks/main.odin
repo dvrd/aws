@@ -57,7 +57,7 @@ COMMANDS := [?]Command {
 	{
 		"release",
 		release_command,
-		"release [--stable] [--allow-drift]",
+		"release [--stable] [--allow-drift] [--push]",
 		"Check, then tag HEAD with the next semantic version. --stable publishes v1.0.0.",
 	},
 }

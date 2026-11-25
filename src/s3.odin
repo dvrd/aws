@@ -1083,6 +1083,16 @@ s3_get_native :: proc(
 	if len(response.body) > bytes_max {
 		return nil, response.status, .Too_Large
 	}
+	// Surf allocated the body with allocator (no budget scope is configured), so
+	// the caller can own its storage outright. The slice starts at the
+	// allocation, so delete(body, allocator) frees it. An empty body or one Surf
+	// cannot hand over is copied instead.
+	if len(response.body) > 0 {
+		chunk, take_error := surf.response_take_body(&response)
+		if take_error.kind == .None {
+			return chunk.storage[:len(chunk.data)], response.status, .None
+		}
+	}
 	copied, allocation_error := make([]u8, len(response.body), allocator)
 	if allocation_error != nil {
 		return nil, response.status, .Unavailable

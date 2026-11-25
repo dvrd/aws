@@ -8,6 +8,7 @@ package main
 import "core:crypto"
 import "core:encoding/hex"
 import "core:encoding/json"
+import "core:mem"
 import "core:os"
 import "core:strings"
 import "core:sys/posix"
@@ -98,6 +99,7 @@ SES_KINDS :: []string {
 	"Invalid_Response",
 }
 EFFECTS :: []string{"Unknown", "Not_Sent", "Response_Received"}
+SECRET_VARIABLES :: []string{"AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "AWS_SESSION_TOKEN"}
 ATTESTATION_MEMBERS :: []string {
 	"principal_type",
 	"role_match",
@@ -713,6 +715,16 @@ aws_cli_trusted :: proc(path: string) -> (resolved: string, failure: Failure) {
 	return resolved, .None
 }
 
+// Zeroes the key material in an environment the runner built (never a view of
+// the process environment or a literal).
+environment_wipe :: proc(environment: ^Environment) {
+	for name in SECRET_VARIABLES {
+		if value, found := environment.variables[name]; found {
+			mem.zero_explicit(raw_data(value), len(value))
+		}
+	}
+}
+
 // Default Credential_Loader: asks the AWS CLI for the credentials and checks the
 // account they belong to before anything native starts.
 credentials :: proc(runner: ^Runner, scope: json.Object, deadline: time.Duration) -> (environment: Environment, failure: Failure) {
@@ -750,8 +762,14 @@ credentials :: proc(runner: ^Runner, scope: json.Object, deadline: time.Duration
 	if code != 0 {
 		return {}, .Credential_Export_Failed
 	}
+	defer mem.zero_explicit(raw_data(data), len(data))
 	exported := decode(data) or_return
 	value, is_object := exported.(json.Object)
+	defer for source in ([]string{"AccessKeyId", "SecretAccessKey", "SessionToken"}) {
+		if text, is_text := value[source].(json.String); is_text {
+			mem.zero_explicit(raw_data(text), len(text))
+		}
+	}
 	if !is_object || !integer_is(value, "Version", 1) {
 		return {}, .Credential_Export_Invalid
 	}
@@ -1017,6 +1035,7 @@ run :: proc(runner: ^Runner) -> (result: json.Object, failure: Failure) {
 	deadline := runner.monotonic(runner) + TOTAL_TIME
 	credential_scope := bound_credential_scope(runner, state, scope) or_return
 	environment := runner.credentials(runner, credential_scope, deadline) or_return
+	defer environment_wipe(&environment)
 	if text_is(credential_scope, "credential_source", "environment") {
 		if !environment.verified {
 			return nil, .Role_Attestation_Required

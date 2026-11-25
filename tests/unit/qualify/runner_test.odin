@@ -452,3 +452,60 @@ instants_need_an_explicit_zone_and_apply_it :: proc(t: ^testing.T) {
 		testing.expect(t, !ok, text)
 	}
 }
+
+@(test)
+ses_without_write_access_is_refused_at_plan :: proc(t: ^testing.T) {
+	test: Test
+	context.allocator = test_begin(&test, t)
+	defer test_end(&test)
+	fixture(&test, write = false, ses = true)
+	_, failure := plan(&test.runner)
+	testing.expect_value(t, failure, Failure.SES_Policy_Invalid)
+	testing.expect(t, !path_present(state_file(&test.runner, "scope.json")))
+}
+
+@(test)
+an_interrupted_plan_can_be_planned_again :: proc(t: ^testing.T) {
+	test: Test
+	context.allocator = test_begin(&test, t)
+	defer test_end(&test)
+	fixture(&test)
+	lock, _ := lock_acquire(test.runner.arguments.state_dir)
+	lock_release(lock)
+	write_file(state_file(&test.runner, "scope.json"), "{}")
+	planned(&test)
+	value, failure := command(&test, "run")
+	testing.expect_value(t, failure, Failure.None)
+	testing.expect_value(t, phase_of(value), "COMPLETE")
+}
+
+@(test)
+a_leftover_policy_is_removed_by_an_unbound_plan :: proc(t: ^testing.T) {
+	test: Test
+	context.allocator = test_begin(&test, t)
+	defer test_end(&test)
+	fixture(&test)
+	lock, _ := lock_acquire(test.runner.arguments.state_dir)
+	lock_release(lock)
+	write_file(state_file(&test.runner, "credential-policy.json"), "{}")
+	planned(&test)
+	testing.expect(t, !path_present(state_file(&test.runner, "credential-policy.json")))
+	_, failure := command(&test, "run")
+	testing.expect(t, failure != .Unbound_Credential_Policy)
+}
+
+@(test)
+a_verified_delete_completes_in_one_save :: proc(t: ^testing.T) {
+	test: Test
+	context.allocator = test_begin(&test, t)
+	defer test_end(&test)
+	fixture(&test)
+	planned(&test)
+	state := document(&test, "state.json")
+	_, stopped, failure := action(&test.runner, &state, "delete", "DELETE_INTENT", "COMPLETE", {}, time.Minute, qualifies_s3 = true)
+	testing.expect_value(t, failure, Failure.None)
+	testing.expect(t, !stopped)
+	saved := document(&test, "state.json")
+	testing.expect_value(t, phase_of(saved), "COMPLETE")
+	testing.expect(t, is_true(saved, "s3_qualified"))
+}

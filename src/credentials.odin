@@ -85,6 +85,7 @@ aws_credentials_with_http :: proc(
 	return credentials, true
 }
 
+@(private)
 aws_credentials_valid :: proc(value: AWS_Credentials) -> bool {
 	if value.access_key == "" || value.secret_key == "" {
 		return false
@@ -188,15 +189,22 @@ Credential_Cancel :: struct {
 // Waiters blocked on the single in-flight refresh. The caller that performs it is not a waiter.
 CREDENTIAL_WAITERS_MAX :: 8
 
+@(private)
 CREDENTIAL_ACCESS_MAX :: 128
+@(private)
 CREDENTIAL_SECRET_MAX :: 256
+@(private)
 CREDENTIAL_TOKEN_MAX :: 8192
+@(private)
 CREDENTIAL_ROLE_MAX :: 128
 // Temp memory one resolution may use: a 64 KiB profile, three metadata replies
 // of up to 64 KiB, and the decoded document, with room to spare. Zeroed in full
 // and freed before the refresh returns.
+@(private)
 CREDENTIAL_SCRATCH_BYTES :: 1 << 20
+@(private)
 CREDENTIAL_IMDS_TOKEN_MAX :: 4096
+@(private)
 CREDENTIAL_RELATIVE_MAX :: 1024
 
 Credential_Cache :: struct {
@@ -219,6 +227,7 @@ Credential_Cache :: struct {
 }
 
 // What one resolution needs. The cache keeps one; aws_credentials builds one per call.
+@(private)
 Credential_Resolver :: struct {
 	execute:    HTTP_Execute,
 	clock:      Credential_Clock,
@@ -227,6 +236,7 @@ Credential_Resolver :: struct {
 	allocator:  mem.Allocator, // the snapshot's allocator
 }
 
+@(private)
 credential_resolver_of :: proc(cache: ^Credential_Cache) -> Credential_Resolver {
 	return {cache.execute, cache.clock, cache.clock_data, cache.modes, cache.allocator}
 }
@@ -301,6 +311,7 @@ credential_cancel :: proc(cache: ^Credential_Cache, cancel: ^Credential_Cancel) 
 }
 
 // EC2 link-local is contacted only when that mode is enabled and the disable switch is not exactly "true".
+@(private)
 credential_ec2_probe_permitted :: proc(modes: Credential_Modes) -> bool {
 	if .EC2 not_in modes {
 		return false
@@ -402,6 +413,7 @@ credential_refresh :: proc(
 // that no refresh is active; the mutex is released for the provider's calls and
 // held again on return. Returns the attempt number, which equals
 // cache.failed_attempt when the attempt failed.
+@(private)
 credential_refresh_run :: proc(cache: ^Credential_Cache) -> (target: u64) {
 	cache.refresh_active = true
 	cache.refresh_attempt += 1
@@ -729,6 +741,7 @@ credential_refresher_status :: proc(
 	return refresher.attempts, refresher.last
 }
 
+@(private)
 credential_cancelled :: proc(cancel: ^Credential_Cancel) -> bool {
 	if cancel == nil {
 		return false
@@ -737,6 +750,7 @@ credential_cancelled :: proc(cancel: ^Credential_Cancel) -> bool {
 	return sync.atomic_load(&cancel.cancelled) != 0
 }
 
+@(private)
 credential_snapshot_usable :: proc(snap: ^Credential_Snapshot, now: time.Time) -> bool {
 	if snap == nil || snap.retired {
 		return false
@@ -749,6 +763,7 @@ credential_snapshot_usable :: proc(snap: ^Credential_Snapshot, now: time.Time) -
 	return time.diff(now, snap.expires) > CREDENTIAL_EXPIRY_SKEW
 }
 
+@(private)
 credential_snapshot_borrow :: proc(snap: ^Credential_Snapshot) -> Credential_Lease {
 	snap.readers += 1
 
@@ -763,6 +778,7 @@ credential_snapshot_borrow :: proc(snap: ^Credential_Snapshot) -> Credential_Lea
 	}
 }
 
+@(private)
 credential_snapshot_retire :: proc(cache: ^Credential_Cache, snap: ^Credential_Snapshot) {
 	if snap == nil {
 		return
@@ -775,6 +791,7 @@ credential_snapshot_retire :: proc(cache: ^Credential_Cache, snap: ^Credential_S
 	}
 }
 
+@(private)
 credential_snapshot_erase :: proc(cache: ^Credential_Cache, snap: ^Credential_Snapshot) {
 	if snap == nil {
 		return
@@ -798,6 +815,7 @@ credential_snapshot_erase :: proc(cache: ^Credential_Cache, snap: ^Credential_Sn
 	free(snap, allocator)
 }
 
+@(private)
 credential_snapshot_new :: proc(
 	allocator: mem.Allocator,
 	source: Credential_Source,
@@ -834,6 +852,7 @@ credential_snapshot_new :: proc(
 	return snap, {}
 }
 
+@(private)
 credential_resolve :: proc(
 	resolver: Credential_Resolver,
 ) -> (
@@ -965,6 +984,7 @@ credential_resolve :: proc(
 	return nil, {kind = .Unavailable}
 }
 
+@(private)
 credential_fetch_ec2 :: proc(
 	resolver: Credential_Resolver,
 ) -> (
@@ -1014,6 +1034,7 @@ credential_fetch_ec2 :: proc(
 	)
 }
 
+@(private)
 credential_fetch_document :: proc(
 	resolver: Credential_Resolver,
 	source: Credential_Source,
@@ -1073,6 +1094,7 @@ credential_fetch_document :: proc(
 	)
 }
 
+@(private)
 credential_metadata_call :: proc(
 	execute: HTTP_Execute,
 	method, url: string,
@@ -1097,6 +1119,7 @@ credential_metadata_call :: proc(
 }
 
 // Fixed link-local metadata only. Full credential URIs and any other host are rejected.
+@(private)
 credential_metadata_url_permitted :: proc(url: string) -> bool {
 	if strings.contains_any(url, "\\@") ||
 	   !strings.contains(url, "://") ||
@@ -1129,6 +1152,7 @@ credential_metadata_url_permitted :: proc(url: string) -> bool {
 	return false
 }
 
+@(private)
 credential_relative_uri_ok :: proc(relative: string) -> bool {
 	if relative == "" || len(relative) > CREDENTIAL_RELATIVE_MAX {
 		return false
@@ -1147,10 +1171,12 @@ credential_relative_uri_ok :: proc(relative: string) -> bool {
 
 // Printable ASCII only: no space, control character or byte above 0x7e. What the
 // metadata service returns is put into URLs and header values.
+@(private)
 credential_text_printable :: proc(text: string) -> bool {
 	return text_visible(text)
 }
 
+@(private)
 credential_bounded_valid :: proc(value: AWS_Credentials) -> bool {
 	return(
 		len(value.access_key) <= CREDENTIAL_ACCESS_MAX &&
@@ -1163,6 +1189,7 @@ credential_bounded_valid :: proc(value: AWS_Credentials) -> bool {
 // Erases a metadata reply. Only the default executor's replies are known to be
 // writable memory of the temporary allocator; an injected executor may return
 // memory this package must not write to, and owns the lifetime of its replies.
+@(private)
 credential_reply_wipe :: proc(execute: HTTP_Execute, reply: []byte) {
 	if execute == http_execute_default && len(reply) > 0 {
 		mem.zero_explicit(raw_data(reply), len(reply))
@@ -1173,6 +1200,7 @@ credential_reply_wipe :: proc(execute: HTTP_Execute, reply: []byte) {
 // YYYY-MM-DDTHH:MM:SS[.fraction](Z|+HH:MM|-HH:MM). The fraction is dropped, which
 // can only make credentials look as if they expire earlier. core:time's RFC 3339
 // parser is not used: it stops inside a fraction longer than two digits.
+@(private)
 credential_instant_parse :: proc(text: string) -> (instant: time.Time, ok: bool) {
 	number :: proc(text: string) -> (value: int, ok: bool) {
 		for index in 0 ..< len(text) {
@@ -1229,10 +1257,12 @@ credential_instant_parse :: proc(text: string) -> (instant: time.Time, ok: bool)
 	return time.time_add(instant, -offset), true
 }
 
+@(private)
 credential_env :: proc(key: string) -> string {
 	return os.get_env(key, context.temp_allocator)
 }
 
+@(private)
 credential_wipe_text :: proc(value: string) {
 	if len(value) == 0 {
 		return
@@ -1241,6 +1271,7 @@ credential_wipe_text :: proc(value: string) {
 	mem.zero_explicit(raw_data(value), len(value))
 }
 
+@(private)
 credential_profile_load :: proc(
 	path, profile: string,
 	strict: bool,

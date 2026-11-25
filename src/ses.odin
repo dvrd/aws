@@ -18,9 +18,11 @@ SES_Error :: enum {
 	Rejected,
 	Invalid_Response,
 }
+@(private)
 SES_Text :: struct {
 	Data, Charset: string,
 }
+@(private)
 SES_Message :: struct {
 	FromEmailAddress: string,
 	Destination:      struct {

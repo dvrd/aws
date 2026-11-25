@@ -63,3 +63,21 @@ nothing_reaches_v1_until_it_is_asked_for :: proc(t: ^testing.T) {
 	testing.expect(t, !plan_valid({stable = true, latest = {1, 0, 0}, previous = "v1.0.0"}))
 	testing.expect(t, plan_valid({stable = true, latest = {0, 3, 0}, previous = "v0.3.0"}))
 }
+
+@(test)
+release_accepts_stable_and_allow_drift :: proc(t: ^testing.T) {
+	options, ok := release_options({"--stable", "--allow-drift"})
+	testing.expect(t, ok && options.stable && options.allow_drift)
+	_, valid := release_options({"--allow"})
+	testing.expect(t, !valid)
+}
+
+@(test)
+release_accepts_push :: proc(t: ^testing.T) {
+	options, ok := release_options({"--push"})
+	testing.expect(t, ok && options.push && !options.stable && !options.allow_drift)
+	options, ok = release_options({"--push", "--stable", "--allow-drift"})
+	testing.expect(t, ok && options.push && options.stable && options.allow_drift)
+	_, valid := release_options({"--publish"})
+	testing.expect(t, !valid)
+}

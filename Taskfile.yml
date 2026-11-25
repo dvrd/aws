@@ -14,6 +14,12 @@ tasks:
     cmds:
       - build/tasks check
 
+  deps:
+    desc: Compare the shared collection with the pins in .krs/packages.json
+    deps: [tasks]
+    cmds:
+      - build/tasks deps {{.CLI_ARGS}}
+
   build:
     desc: Type-check the library with vet and warnings as errors
     deps: [tasks]
@@ -46,10 +52,16 @@ tasks:
       - build/tasks test {{.CLI_ARGS}}
 
   test:signatures:
-    desc: Recalculate the SigV4 fixtures with OpenSSL
+    desc: Check the SigV4 reference signatures by recomputing them with OpenSSL
     deps: [tasks]
     cmds:
       - build/tasks signatures
+
+  test:layout:
+    desc: Check that every source file has a unit test file of the same name
+    deps: [tasks]
+    cmds:
+      - build/tasks layout
 
   test:consumer:
     desc: Build and run a consumer that vendors the library
@@ -105,6 +117,11 @@ tasks:
       - mkdir -p build
       - '"${ODIN:-odin}" build cmd/qualify -vet -warnings-as-errors -out:build/qualify'
 
+  odin:pin:
+    desc: Record the Odin fork commit the suites are tested with
+    cmds:
+      - git -C "$("${ODIN:-odin}" root)" rev-parse HEAD > ODIN_COMMIT
+
   version:
     desc: Show the last released version and the one the next release would get
     summary: |
@@ -127,7 +144,9 @@ tasks:
       bump to v1. Publishing v1.0.0 is a decision made by asking for it:
 
         task release -- --stable
+        task release -- --push      # tag, then push the tag to origin (main must be pushed)
 
+      Pass --allow-drift to release when the shared collection or compiler differs from its pin.
       The tag is annotated with those subjects. Consumers pin it with
       "krs update aws@<tag>". Releases are cut from a clean main only.
     deps: [tasks]

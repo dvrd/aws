@@ -215,7 +215,9 @@ sts_checks_the_exported_triple_and_rejects_wrong_account :: proc(t: ^testing.T) 
 	defer test_end(&test)
 	fixture(&test)
 	planned(&test)
-	test.runner.arguments.aws_cli = "/fixture/aws"
+	// A real, trusted file: the CLI is checked before any capture.
+	test.runner.arguments.aws_cli = strings.concatenate({test.root, "/fake-aws"})
+	write_file(test.runner.arguments.aws_cli, "#!/bin/sh\nexit 1\n", posix.S_IRWXU)
 	test.runner.variable = variable_fixed
 	test.variables["PATH"] = "/usr/bin:/bin"
 	test.variables["LINEAR_API"] = "fake-linear-secret"
@@ -311,9 +313,109 @@ live_binary_singleton_and_false_success_guards :: proc(t: ^testing.T) {
 	testing.expect_value(t, failure, Failure.None)
 	testing.expect_value(t, phase_of(value), "PUT_INTENT")
 	testing.expect(t, actions_are(&test, {"read", "put"}))
-	write_file(test.runner.arguments.binary, "#!/bin/sh\nexit 1\n", posix.S_IRWXU)
+	write_file(state_file(&test.runner, PROBE_NAME), "#!/bin/sh\nexit 1\n", posix.S_IRWXU)
 	_, failure = command(&test, "run")
 	testing.expect_value(t, failure, Failure.Run_Binding_Mismatch)
+}
+
+@(test)
+the_planned_probe_is_a_private_copy :: proc(t: ^testing.T) {
+	test: Test
+	context.allocator = test_begin(&test, t)
+	defer test_end(&test)
+	fixture(&test)
+	planned(&test)
+	copy := state_file(&test.runner, "probe")
+	info: posix.stat_t
+	testing.expect(t, posix.lstat(strings.clone_to_cstring(copy), &info) == .OK)
+	testing.expect(t, posix.S_ISREG(info.st_mode))
+	testing.expect_value(t, permission_bits(info.st_mode), 0o700)
+	state := document(&test, "state.json")
+	testing.expect(t, text_is(state, "binary", copy))
+	testing.expect(t, text_is(state, "binary_sha256", sha256_hex(transmute([]u8)read_text(copy))))
+	testing.expect(t, text_is(state, "binary_source", test.runner.arguments.binary))
+	// The original no longer matters once the copy is made.
+	write_file(test.runner.arguments.binary, "#!/bin/sh\nexit 1\n", posix.S_IRWXU)
+	_, failure := command(&test, "run")
+	testing.expect_value(t, failure, Failure.None)
+	testing.expect(t, len(test.actions) > 0)
+}
+
+@(test)
+a_state_bound_to_an_outside_probe_is_refused :: proc(t: ^testing.T) {
+	test: Test
+	context.allocator = test_begin(&test, t)
+	defer test_end(&test)
+	fixture(&test)
+	planned(&test)
+	test.runner.launch = launch_forbidden
+	test.runner.capture = capture_forbidden
+	// Same bytes, same digest: only the path differs.
+	state := document(&test, "state.json")
+	state["binary"] = test.runner.arguments.binary
+	write_document(state_file(&test.runner, "state.json"), state)
+	_, failure := command(&test, "run")
+	testing.expect_value(t, failure, Failure.Run_Binding_Mismatch)
+	_, launched := native(&test.runner, state, "read", {}, test.runner.monotonic(&test.runner) + 10 * time.Second)
+	testing.expect_value(t, launched, Failure.Run_Binding_Mismatch)
+	testing.expect_value(t, test.captures, 0)
+	testing.expect_value(t, len(test.actions), 0)
+}
+
+@(test)
+the_aws_cli_must_be_absolute_and_trusted :: proc(t: ^testing.T) {
+	test: Test
+	context.allocator = test_begin(&test, t)
+	defer test_end(&test)
+	fixture(&test)
+	planned(&test)
+	test.runner.variable = variable_fixed
+	test.variables["PATH"] = "/usr/bin:/bin"
+	test.runner.capture = capture_forbidden
+	scope := document(&test, "scope.json")
+	deadline := test.runner.monotonic(&test.runner) + 10 * time.Second
+
+	test.runner.arguments.aws_cli = "fake-aws"
+	_, failure := credentials(&test.runner, scope, deadline)
+	testing.expect_value(t, failure, Failure.AWS_CLI_Required)
+
+	cli := strings.concatenate({test.root, "/fake-aws"})
+	write_file(cli, "#!/bin/sh\nexit 1\n", {.IRUSR, .IWUSR, .IXUSR, .IWGRP, .IWOTH})
+	test.runner.arguments.aws_cli = cli
+	_, failure = credentials(&test.runner, scope, deadline)
+	testing.expect_value(t, failure, Failure.AWS_CLI_Required)
+
+	test.runner.arguments.aws_cli = strings.concatenate({test.root, "/missing-aws"})
+	_, failure = credentials(&test.runner, scope, deadline)
+	testing.expect_value(t, failure, Failure.AWS_CLI_Required)
+	testing.expect_value(t, test.captures, 0)
+
+	// A link to a trusted CLI is resolved, and only the resolved file is run.
+	write_file(cli, "#!/bin/sh\nexit 1\n", posix.S_IRWXU)
+	link := strings.concatenate({test.root, "/aws-link"})
+	testing.expect(t, posix.symlink(strings.clone_to_cstring(cli), strings.clone_to_cstring(link)) == .OK)
+	test.runner.arguments.aws_cli = link
+	test.runner.capture =
+	proc(
+		runner: ^Runner,
+		argv: []string,
+		environment: map[string]string,
+		deadline: time.Duration,
+		limit: int,
+	) -> (
+		int,
+		[]u8,
+		Failure,
+	) {
+		test := cast(^Test)runner.user
+		test.captures += 1
+		test.verb = argv[0]
+		return 1, nil, .None
+	}
+	_, failure = credentials(&test.runner, scope, deadline)
+	testing.expect_value(t, failure, Failure.Credential_Export_Failed)
+	testing.expect_value(t, test.captures, 1)
+	testing.expect_value(t, test.verb, cli)
 }
 
 @(test)
@@ -349,4 +451,61 @@ instants_need_an_explicit_zone_and_apply_it :: proc(t: ^testing.T) {
 		_, ok := instant_parse(text)
 		testing.expect(t, !ok, text)
 	}
+}
+
+@(test)
+ses_without_write_access_is_refused_at_plan :: proc(t: ^testing.T) {
+	test: Test
+	context.allocator = test_begin(&test, t)
+	defer test_end(&test)
+	fixture(&test, write = false, ses = true)
+	_, failure := plan(&test.runner)
+	testing.expect_value(t, failure, Failure.SES_Policy_Invalid)
+	testing.expect(t, !path_present(state_file(&test.runner, "scope.json")))
+}
+
+@(test)
+an_interrupted_plan_can_be_planned_again :: proc(t: ^testing.T) {
+	test: Test
+	context.allocator = test_begin(&test, t)
+	defer test_end(&test)
+	fixture(&test)
+	lock, _ := lock_acquire(test.runner.arguments.state_dir)
+	lock_release(lock)
+	write_file(state_file(&test.runner, "scope.json"), "{}")
+	planned(&test)
+	value, failure := command(&test, "run")
+	testing.expect_value(t, failure, Failure.None)
+	testing.expect_value(t, phase_of(value), "COMPLETE")
+}
+
+@(test)
+a_leftover_policy_is_removed_by_an_unbound_plan :: proc(t: ^testing.T) {
+	test: Test
+	context.allocator = test_begin(&test, t)
+	defer test_end(&test)
+	fixture(&test)
+	lock, _ := lock_acquire(test.runner.arguments.state_dir)
+	lock_release(lock)
+	write_file(state_file(&test.runner, "credential-policy.json"), "{}")
+	planned(&test)
+	testing.expect(t, !path_present(state_file(&test.runner, "credential-policy.json")))
+	_, failure := command(&test, "run")
+	testing.expect(t, failure != .Unbound_Credential_Policy)
+}
+
+@(test)
+a_verified_delete_completes_in_one_save :: proc(t: ^testing.T) {
+	test: Test
+	context.allocator = test_begin(&test, t)
+	defer test_end(&test)
+	fixture(&test)
+	planned(&test)
+	state := document(&test, "state.json")
+	_, stopped, failure := action(&test.runner, &state, "delete", "DELETE_INTENT", "COMPLETE", {}, time.Minute, qualifies_s3 = true)
+	testing.expect_value(t, failure, Failure.None)
+	testing.expect(t, !stopped)
+	saved := document(&test, "state.json")
+	testing.expect_value(t, phase_of(saved), "COMPLETE")
+	testing.expect(t, is_true(saved, "s3_qualified"))
 }

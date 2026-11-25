@@ -255,7 +255,8 @@ sts_checks_the_exported_triple_and_rejects_wrong_account :: proc(t: ^testing.T) 
 					"}",
 				},
 			)
-			return 0, transmute([]u8)text, .None
+			test.exported = transmute([]u8)text
+			return 0, test.exported, .None
 		}
 		testing.expect_value(test.t, environment["AWS_SECRET_ACCESS_KEY"], SECRET)
 		return 0, transmute([]u8)strings.concatenate({`{"Account":"`, test.kind, `"}`}), .None
@@ -267,6 +268,11 @@ sts_checks_the_exported_triple_and_rejects_wrong_account :: proc(t: ^testing.T) 
 	testing.expect(t, "LINEAR_API" not_in environment.variables)
 	testing.expect(t, "AWS_SESSION_TOKEN" not_in environment.variables)
 	testing.expect_value(t, test.captures, 2)
+	testing.expect(t, len(test.exported) > 0)
+	for octet in test.exported {
+		testing.expect_value(t, octet, 0)
+	}
+	testing.expect_value(t, environment.variables["AWS_SECRET_ACCESS_KEY"], SECRET)
 
 	test.kind = "000000000000"
 	_, failure = credentials(&test.runner, scope, deadline)
@@ -538,4 +544,27 @@ result_tables_follow_the_library_enums :: proc(t: ^testing.T) {
 			testing.expectf(t, index < len(item.table) && item.table[index] == name, "%s[%d] should be %s", item.name, index, name)
 		}
 	}
+}
+
+@(test)
+environment_wipe_zeroes_only_the_key_material :: proc(t: ^testing.T) {
+	test: Test
+	context.allocator = test_begin(&test, t)
+	defer test_end(&test)
+	environment := Environment {
+		variables = make(map[string]string),
+	}
+	for name in SECRET_VARIABLES {
+		environment.variables[name] = strings.clone("fake-private-material")
+	}
+	environment.variables["PATH"] = strings.clone("/usr/bin:/bin")
+	environment_wipe(&environment)
+	for name in SECRET_VARIABLES {
+		value := environment.variables[name]
+		testing.expect_value(t, len(value), len("fake-private-material"))
+		for octet in transmute([]u8)value {
+			testing.expect_value(t, octet, 0)
+		}
+	}
+	testing.expect_value(t, environment.variables["PATH"], "/usr/bin:/bin")
 }

@@ -1351,3 +1351,44 @@ status_classifier_matches_the_documented_rule :: proc(t: ^testing.T) {
 		testing.expect_value(t, s3_status_error(c.status), c.want)
 	}
 }
+
+// One signed request costs the header array, the line slice and one text buffer
+// for the url and every header value; the canonical request is never built.
+@(test)
+signing_one_request_allocates_little :: proc(t: ^testing.T) {
+	backing := make([]u8, 64 * 1024)
+	defer delete(backing)
+	arena: mem.Arena
+	mem.arena_init(&arena, backing)
+	tracking: mem.Tracking_Allocator
+	mem.tracking_allocator_init(&tracking, mem.arena_allocator(&arena))
+	defer mem.tracking_allocator_destroy(&tracking)
+	credentials := AWS_Credentials{"fixture-key", "fixture-secret", strings.repeat("t", 1024, context.allocator)}
+	defer delete(credentials.session_token)
+	body := "payload"
+	{
+		context.temp_allocator = mem.tracking_allocator(&tracking)
+		_, ok := s3_put_request({bucket = "examplebucket", region = "us-east-1"}, credentials, "a b/c", transmute([]u8)body, "text/plain", time.unix(1369353600, 0))
+		testing.expect(t, ok)
+	}
+	testing.expectf(t, tracking.total_allocation_count <= 4, "%d allocations", tracking.total_allocation_count)
+}
+
+@(test)
+signing_copies_the_session_token_once :: proc(t: ^testing.T) {
+	backing := make([]u8, 64 * 1024)
+	defer delete(backing)
+	arena: mem.Arena
+	mem.arena_init(&arena, backing)
+	token := strings.repeat("Q", 300, context.allocator)
+	defer delete(token)
+	credentials := AWS_Credentials{"fixture-key", "fixture-secret", token}
+	body := "payload"
+	{
+		context.temp_allocator = mem.arena_allocator(&arena)
+		request, ok := s3_put_request(S3_REQUEST_FIXTURE_CONFIG, credentials, "key", transmute([]u8)body, "text/plain", time.unix(1369353600, 0))
+		testing.expect(t, ok)
+		testing.expect_value(t, s3_request_header(request, "x-amz-security-token"), token)
+	}
+	testing.expect_value(t, strings.count(string(backing[:arena.offset]), token), 1)
+}

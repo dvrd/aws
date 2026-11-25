@@ -1,7 +1,6 @@
 package aws
 
 import "core:crypto/hash"
-import "core:crypto/hmac"
 import "core:crypto/x509"
 import "core:encoding/hex"
 import "core:fmt"
@@ -370,26 +369,49 @@ s3_object_sign :: proc(
 	headers: []string,
 	ok: bool,
 ) {
-	if !aws_credentials_valid(credentials) ||
-	   s3_config_error(config) != "" ||
-	   config.bucket == "" ||
-	   key == "" ||
-	   strings.contains_any(content_type, "\r\n\x00") {
+	if !s3_input_valid(config, credentials, key) || strings.contains_any(content_type, "\r\n\x00") {
 		return
 	}
-	origin, host, path := s3_location(config, key)
-	payload_digest := digest if digest != "" else s3_sha256(body)
+	// The empty payload's digest is a constant; any other body is hashed on the stack.
+	payload_digest := digest
+	digest_hex: [64]u8
+	if payload_digest == "" && len(body) == 0 {
+		payload_digest = EMPTY_PAYLOAD_SHA256
+	} else if payload_digest == "" {
+		sum: [32]u8
+		hash.hash(.SHA256, body, sum[:])
+		sigv4_hex(sum[:], digest_hex[:])
+		payload_digest = string(digest_hex[:])
+	}
+	stamp_buffer: [S3_TIMESTAMP_BYTES_MAX]u8
+	stamp := s3_timestamp_write(stamp_buffer[:], now)
+
+	// The url and every header line share one buffer.
+	size := s3_location_size(config, key) + s3_object_headers_size(config, credentials, payload_digest, stamp, content_type)
+	builder, builder_error := strings.builder_make_len_cap(0, size, context.temp_allocator)
+	if builder_error != nil {
+		return
+	}
+	host_start, path_start := s3_location_write(&builder, config, key)
+	path_end := strings.builder_len(builder)
+	located := strings.to_string(builder)
 	headers = s3_object_headers(
+		&builder,
 		config,
 		credentials,
 		method,
-		host,
-		path,
+		located[host_start:path_start],
+		located[path_start:path_end],
 		payload_digest,
-		s3_timestamp(now),
+		stamp,
 		content_type,
-	)
-	return fmt.tprintf("%s%s", origin, path), headers, true
+	) or_return
+	return strings.to_string(builder)[:path_end], headers, true
+}
+
+// The checks every signed S3 request makes before anything is built.
+s3_input_valid :: proc(config: S3_Config, credentials: AWS_Credentials, key: string) -> bool {
+	return aws_credentials_valid(credentials) && s3_config_error(config) == "" && config.bucket != "" && key != ""
 }
 
 // One signed request for a transport the caller owns, such as an async client.
@@ -541,58 +563,95 @@ s3_header_fields :: proc(lines: []string, fields: []S3_Header) -> (count: int, o
 	return count, true
 }
 
+// The signed header lines of one object request, in the order they are sent:
+// x-amz-content-sha256, x-amz-date, Expect, an optional Content-Type, an optional
+// x-amz-security-token and Authorization. Content-Type is sent but not signed.
+// The line text is written into builder after the request is signed, so host and
+// path may point into builder; the lines are cut from it once it is complete.
 s3_object_headers :: proc(
+	builder: ^strings.Builder,
 	config: S3_Config,
 	credentials: AWS_Credentials,
 	method, host, path, digest, stamp, content_type: string,
-) -> []string {
-	canonical_headers := fmt.tprintf(
-		"host:%s\nx-amz-content-sha256:%s\nx-amz-date:%s\n",
-		host,
-		digest,
-		stamp,
+) -> (
+	headers: []string,
+	ok: bool,
+) {
+	token := credentials.session_token
+	signed_headers := [4]Sigv4_Header {
+		{"host", host},
+		{"x-amz-content-sha256", digest},
+		{"x-amz-date", stamp},
+		{"x-amz-security-token", token},
+	}
+	signed := "host;x-amz-content-sha256;x-amz-date;x-amz-security-token"
+	signed_count := 4
+	if token == "" {
+		signed = signed[:len("host;x-amz-content-sha256;x-amz-date")]
+		signed_count = 3
+	}
+	signature: [64]u8
+	sigv4_sign(
+		credentials.secret_key,
+		{
+			service = "s3",
+			region = config.region,
+			method = method,
+			path = path,
+			headers = signed_headers[:signed_count],
+			payload_hash = digest,
+			stamp = stamp,
+		},
+		&signature,
 	)
-	signed := "host;x-amz-content-sha256;x-amz-date"
-	headers := make([dynamic]string, 0, 8, context.temp_allocator)
-	append(
-		&headers,
-		fmt.tprintf("x-amz-content-sha256: %s", digest),
-		fmt.tprintf("x-amz-date: %s", stamp),
-		"Expect:",
-	)
+
+	count := 4 + int(content_type != "") + int(token != "")
+	lines, allocation_error := make([]string, count, context.temp_allocator)
+	if allocation_error != nil {
+		return
+	}
+	// starts[i] and ends[i] bound line i in builder; Expect has no text there.
+	starts, ends: [6]int
+	line := 0
+	write_line :: proc(builder: ^strings.Builder, starts, ends: ^[6]int, line: ^int, name, value: string) {
+		starts[line^] = strings.builder_len(builder^)
+		strings.write_string(builder, name)
+		strings.write_string(builder, value)
+		ends[line^] = strings.builder_len(builder^)
+		line^ += 1
+	}
+	write_line(builder, &starts, &ends, &line, "x-amz-content-sha256: ", digest)
+	write_line(builder, &starts, &ends, &line, "x-amz-date: ", stamp)
+	expect := line
+	line += 1
 	if content_type != "" {
-		append(&headers, fmt.tprintf("Content-Type: %s", content_type))
+		write_line(builder, &starts, &ends, &line, "Content-Type: ", content_type)
 	}
-	if credentials.session_token != "" {
-		canonical_headers = fmt.tprintf(
-			"%sx-amz-security-token:%s\n",
-			canonical_headers,
-			credentials.session_token,
-		)
-		signed = fmt.tprintf("%s;x-amz-security-token", signed)
-		append(&headers, fmt.tprintf("x-amz-security-token: %s", credentials.session_token))
+	if token != "" {
+		write_line(builder, &starts, &ends, &line, "x-amz-security-token: ", token)
 	}
-	canonical := fmt.tprintf(
-		"%s\n%s\n\n%s\n%s\n%s",
-		method,
-		path,
-		canonical_headers,
-		signed,
-		digest,
-	)
-	scope := fmt.tprintf("%s/%s/s3/aws4_request", stamp[:8], config.region)
-	signature := s3_signature(credentials.secret_key, config.region, stamp, scope, canonical)
-	append(
-		&headers,
-		fmt.tprintf(
-			"Authorization: AWS4-HMAC-SHA256 Credential=%s/%s, SignedHeaders=%s, Signature=%s",
-			credentials.access_key,
-			scope,
-			signed,
-			signature,
-		),
-	)
-	return headers[:]
+	starts[line] = strings.builder_len(builder^)
+	sigv4_authorization_write(builder, credentials.access_key, stamp, config.region, "s3", signed, &signature)
+	ends[line] = strings.builder_len(builder^)
+
+	text := strings.to_string(builder^)
+	for i in 0 ..< count {
+		lines[i] = "Expect:" if i == expect else text[starts[i]:ends[i]]
+	}
+	return lines, true
+}
+
+// The bytes s3_object_headers writes into its builder, at most.
+s3_object_headers_size :: proc(
+	config: S3_Config,
+	credentials: AWS_Credentials,
+	digest, stamp, content_type: string,
+) -> int {
+	size := len("x-amz-content-sha256: ") + len(digest) + len("x-amz-date: ") + len(stamp)
+	size += len("Content-Type: ") + len(content_type)
+	size += len("x-amz-security-token: ") + len(credentials.session_token)
+	signed := "host;x-amz-content-sha256;x-amz-date;x-amz-security-token"
+	return size + sigv4_authorization_size(credentials.access_key, config.region, "s3", signed)
 }
 
 // A presigned GET for a browser or another client to fetch directly. No I/O.
@@ -609,62 +668,117 @@ s3_download_url :: proc(
 	url: string,
 	ok: bool,
 ) {
-	if !aws_credentials_valid(credentials) ||
-	   s3_config_error(config) != "" ||
-	   config.bucket == "" ||
-	   key == "" ||
-	   expires_seconds < 1 ||
-	   expires_seconds > 604800 {
+	if !s3_input_valid(config, credentials, key) || expires_seconds < 1 || expires_seconds > 604800 {
 		return
 	}
-	origin, host, path := s3_location(config, key)
-	stamp := s3_timestamp(signing_time(now))
-	scope := fmt.tprintf("%s/%s/s3/aws4_request", stamp[:8], config.region)
-	query := fmt.tprintf(
-		"X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=%s&X-Amz-Date=%s&X-Amz-Expires=%d",
-		s3_encode(fmt.tprintf("%s/%s", credentials.access_key, scope)),
-		stamp,
-		expires_seconds,
-	)
-	if credentials.session_token != "" {
-		query = fmt.tprintf(
-			"%s&X-Amz-Security-Token=%s",
-			query,
-			s3_encode(credentials.session_token),
-		)
+	stamp_buffer: [S3_TIMESTAMP_BYTES_MAX]u8
+	stamp := s3_timestamp_write(stamp_buffer[:], signing_time(now))
+	token := credentials.session_token
+
+	// The url is built once: origin, path, the query that is signed, then the
+	// signature. Every encoded byte takes at most three.
+	size := s3_location_size(config, key) + 1
+	size += len("X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=")
+	size += 3 * (len(credentials.access_key) + 1 + sigv4_scope_size(config.region, "s3"))
+	size += len("&X-Amz-Date=") + len(stamp) + len("&X-Amz-Expires=") + 20
+	size += len("&X-Amz-Security-Token=") + 3 * len(token) + len("&X-Amz-SignedHeaders=host")
+	size += len("&X-Amz-Signature=") + 64
+	builder, builder_error := strings.builder_make_len_cap(0, size, context.temp_allocator)
+	if builder_error != nil {
+		return
 	}
-	query = fmt.tprintf("%s&X-Amz-SignedHeaders=host", query)
-	canonical := fmt.tprintf("GET\n%s\n%s\nhost:%s\n\nhost\nUNSIGNED-PAYLOAD", path, query, host)
-	signature := s3_signature(credentials.secret_key, config.region, stamp, scope, canonical)
-	return fmt.tprintf("%s%s?%s&X-Amz-Signature=%s", origin, path, query, signature), true
+	host_start, path_start := s3_location_write(&builder, config, key)
+	path_end := strings.builder_len(builder)
+	strings.write_byte(&builder, '?')
+	query_start := strings.builder_len(builder)
+	strings.write_string(&builder, "X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=")
+	// Encoding is per byte, so the credential is encoded piece by piece.
+	for piece in ([]string{credentials.access_key, "/", stamp[:8], "/", config.region, "/s3/aws4_request"}) {
+		s3_encode_write(&builder, piece)
+	}
+	strings.write_string(&builder, "&X-Amz-Date=")
+	strings.write_string(&builder, stamp)
+	strings.write_string(&builder, "&X-Amz-Expires=")
+	strings.write_int(&builder, expires_seconds)
+	if token != "" {
+		strings.write_string(&builder, "&X-Amz-Security-Token=")
+		s3_encode_write(&builder, token)
+	}
+	strings.write_string(&builder, "&X-Amz-SignedHeaders=host")
+
+	text := strings.to_string(builder)
+	signed_headers := [1]Sigv4_Header{{"host", text[host_start:path_start]}}
+	signature: [64]u8
+	sigv4_sign(
+		credentials.secret_key,
+		{
+			service = "s3",
+			region = config.region,
+			method = "GET",
+			path = text[path_start:path_end],
+			query = text[query_start:],
+			headers = signed_headers[:],
+			payload_hash = "UNSIGNED-PAYLOAD",
+			stamp = stamp,
+		},
+		&signature,
+	)
+	strings.write_string(&builder, "&X-Amz-Signature=")
+	strings.write_bytes(&builder, signature[:])
+	return strings.to_string(builder), true
 }
 
-s3_location :: proc(config: S3_Config, key: string) -> (origin, host, path: string) {
-	origin = config.endpoint
-	suffix := "amazonaws.com.cn" if strings.has_prefix(config.region, "cn-") else "amazonaws.com"
+// Writes the origin and then the encoded path of key into builder, which together
+// are the request URL. host_start and path_start are offsets into builder.
+s3_location_write :: proc(
+	builder: ^strings.Builder,
+	config: S3_Config,
+	key: string,
+) -> (
+	host_start, path_start: int,
+) {
 	// A dotted bucket forces path style on AWS only; an endpoint is used as given.
-	path_style := config.path_style || origin == "" && strings.contains(config.bucket, ".")
-
-	if origin == "" {
-		if path_style {
-			origin = fmt.tprintf("https://s3.%s.%s", config.region, suffix)
-		} else {
-			origin = fmt.tprintf("https://%s.s3.%s.%s", config.bucket, config.region, suffix)
+	path_style := config.path_style || config.endpoint == "" && strings.contains(config.bucket, ".")
+	host_start = strings.builder_len(builder^) + len("https://")
+	if config.endpoint != "" {
+		strings.write_string(builder, config.endpoint)
+	} else {
+		strings.write_string(builder, "https://")
+		if !path_style {
+			strings.write_string(builder, config.bucket)
+			strings.write_byte(builder, '.')
 		}
+		strings.write_string(builder, "s3.")
+		strings.write_string(builder, config.region)
+		strings.write_byte(builder, '.')
+		strings.write_string(builder, "amazonaws.com.cn" if strings.has_prefix(config.region, "cn-") else "amazonaws.com")
 	}
 
-	host = origin[8:]
-	path = fmt.tprintf("/%s", s3_encode(key, true))
+	path_start = strings.builder_len(builder^)
+	strings.write_byte(builder, '/')
 	if path_style {
-		path = fmt.tprintf("/%s%s", config.bucket, path)
+		strings.write_string(builder, config.bucket)
+		strings.write_byte(builder, '/')
 	}
-
+	s3_encode_write(builder, key, true)
 	return
+}
+
+// The bytes s3_location_write writes, at most.
+s3_location_size :: proc(config: S3_Config, key: string) -> int {
+	origin := len(config.endpoint) + len("https://") + len(config.bucket) + len(".s3.") + len(config.region) + len(".amazonaws.com.cn")
+	return origin + 2 + len(config.bucket) + 3 * len(key)
 }
 
 s3_encode :: proc(text: string, keep_slashes := false) -> string {
 	builder := strings.builder_make(allocator = context.temp_allocator)
+	s3_encode_write(&builder, text, keep_slashes)
+	return strings.to_string(builder)
+}
 
+// Writes text into builder percent-encoded as SigV4 requires: unreserved bytes as
+// they are, a slash too when keep_slashes is set, and every other byte as %XX.
+s3_encode_write :: proc(builder: ^strings.Builder, text: string, keep_slashes := false) {
 	for ch in transmute([]byte)text {
 		if is_alphanumeric(ch) ||
 		   ch == '-' ||
@@ -672,16 +786,14 @@ s3_encode :: proc(text: string, keep_slashes := false) -> string {
 		   ch == '.' ||
 		   ch == '~' ||
 		   keep_slashes && ch == '/' {
-			strings.write_byte(&builder, ch)
+			strings.write_byte(builder, ch)
 		} else {
 			digits := "0123456789ABCDEF"
-			strings.write_byte(&builder, '%')
-			strings.write_byte(&builder, digits[ch >> 4])
-			strings.write_byte(&builder, digits[ch & 15])
+			strings.write_byte(builder, '%')
+			strings.write_byte(builder, digits[ch >> 4])
+			strings.write_byte(builder, digits[ch & 15])
 		}
 	}
-
-	return strings.to_string(builder)
 }
 
 s3_sha256 :: proc(data: []byte) -> string {
@@ -691,59 +803,35 @@ s3_sha256 :: proc(data: []byte) -> string {
 	return string(hex.encode(digest[:], allocator = context.temp_allocator))
 }
 
-// The secret and the keys derived from it stay on the stack and are erased before
-// returning, so no copy outlives the caller's credentials.
+// Signs a canonical request given as a string, under the given scope. The secret
+// and the keys derived from it stay on the stack and are erased before returning,
+// so no copy outlives the caller's credentials. The signers stream their canonical
+// requests through sigv4_sign instead; this form remains for fixtures.
 s3_signature :: proc(
 	secret, region, stamp, scope, canonical: string,
 	service: string = "s3",
 ) -> string {
-	// "AWS4" + secret is the first HMAC key. HMAC replaces a key longer than one
-	// SHA-256 block with its digest, so a long secret is hashed here, not copied.
-	seed: [64]byte
-	key, next: [32]byte
-	defer {
-		mem.zero_explicit(&seed, size_of(seed))
-		mem.zero_explicit(&key, size_of(key))
-		mem.zero_explicit(&next, size_of(next))
-	}
-	prefix := "AWS4"
-	seed_size := len(prefix) + len(secret)
-	if seed_size <= len(seed) {
-		copy(seed[:], prefix)
-		copy(seed[len(prefix):], secret)
-	} else {
-		hasher: hash.Context
-		hash.init(&hasher, .SHA256)
-		hash.update(&hasher, transmute([]byte)prefix)
-		hash.update(&hasher, transmute([]byte)secret)
-		hash.final(&hasher, seed[:32])
-		mem.zero_explicit(&hasher, size_of(hasher))
-		seed_size = 32
-	}
-	hmac.sum(.SHA256, key[:], transmute([]byte)stamp[:8], seed[:seed_size])
-
-	for text in ([]string{region, service, "aws4_request"}) {
-		hmac.sum(.SHA256, next[:], transmute([]byte)text, key[:])
-		key = next
-	}
-
-	to_sign := fmt.tprintf(
-		"AWS4-HMAC-SHA256\n%s\n%s\n%s",
-		stamp,
-		scope,
-		s3_sha256(transmute([]byte)canonical),
-	)
-	signature: [32]byte
-	hmac.sum(.SHA256, signature[:], transmute([]byte)to_sign, key[:])
+	digest, signature: [32]u8
+	hash.hash(.SHA256, transmute([]byte)canonical, digest[:])
+	sigv4_signature_from_digest(secret, region, service, stamp, []string{scope}, &digest, &signature)
 
 	return string(hex.encode(signature[:], allocator = context.temp_allocator))
 }
 
 s3_timestamp :: proc(now: time.Time) -> string {
+	buffer: [S3_TIMESTAMP_BYTES_MAX]u8
+	return strings.clone(s3_timestamp_write(buffer[:], now), context.temp_allocator)
+}
+
+// A stamp is 16 bytes for years 1000 to 9999; the bound leaves room for others.
+S3_TIMESTAMP_BYTES_MAX :: 32
+
+// Formats now as YYYYMMDDTHHMMSSZ into buffer and returns that part of it.
+s3_timestamp_write :: proc(buffer: []u8, now: time.Time) -> string {
 	year, month, day := time.date(now)
 	hour, minute, second := time.clock(now)
 
-	return fmt.tprintf("%04d%02d%02dT%02d%02d%02dZ", year, int(month), day, hour, minute, second)
+	return fmt.bprintf(buffer, "%04d%02d%02dT%02d%02d%02dZ", year, int(month), day, hour, minute, second)
 }
 
 S3_GET_BYTES_MAX :: 64 * 1024 * 1024 // Surf's response body ceiling
@@ -823,10 +911,7 @@ s3_get :: proc(
 	S3_Get_Error,
 ) {
 	if execute == nil ||
-	   !aws_credentials_valid(credentials) ||
-	   s3_config_error(config) != "" ||
-	   config.bucket == "" ||
-	   key == "" ||
+	   !s3_input_valid(config, credentials, key) ||
 	   bytes_max < 0 ||
 	   bytes_max > S3_GET_BYTES_MAX {
 		return nil, .Invalid_Input
@@ -836,10 +921,10 @@ s3_get :: proc(
 	if config.ca_file != "" && execute == s3_get_native {
 		return nil, .Invalid_Input
 	}
-	origin, host, path := s3_location(config, key)
-	stamp := s3_timestamp(signing_time(now))
-	headers := s3_object_headers(config, credentials, "GET", host, path, s3_sha256(nil), stamp, "")
-	url := fmt.tprintf("%s%s", origin, path)
+	url, headers, signed := s3_object_sign(config, credentials, "GET", key, nil, "", signing_time(now), EMPTY_PAYLOAD_SHA256)
+	if !signed {
+		return nil, .Invalid_Input
+	}
 	started := time.tick_now()
 	body, status, error := execute(url, headers, S3_GET_TIMEOUT_MS, bytes_max, allocator)
 	answered := status >= 200 && status <= 299

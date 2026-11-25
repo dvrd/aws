@@ -1509,6 +1509,42 @@ profile_files_are_read_the_way_the_aws_cli_reads_them :: proc(t: ^testing.T) {
 }
 
 @(test)
+profile_section_headers_end_at_the_last_bracket :: proc(t: ^testing.T) {
+	directory, error := os.make_directory_temp("", "aws-header-*", context.allocator)
+	if !testing.expect(t, error == nil) {
+		return
+	}
+	defer delete(directory)
+	defer os.remove(directory)
+	path := fmt.aprintf("%s/credentials", directory)
+	defer delete(path)
+	defer os.remove(path)
+	// The expectations come from botocore 2.34.40: "key" is what profile "prod" gets.
+	Header_Case :: struct {
+		header: string,
+		key:    string,
+	}
+	cases := []Header_Case {
+		{"[prod]", "k1"},
+		{"[prod] junk", "k1"},
+		{"[prod]#c", "k1"},
+		{"[prod]\t; c", "k1"},
+		{"[prod] # see [wiki]", ""},
+		{"[prod] ; [x]", ""},
+		{"[prod]x]", ""},
+		{"[pro]d]", ""},
+		{"[ prod ]", ""},
+	}
+	for entry in cases {
+		text := fmt.aprintf("%s\naws_access_key_id = k1\naws_secret_access_key = s1\n", entry.header)
+		defer delete(text)
+		testing.expect(t, os.write_entire_file(path, text) == nil)
+		credentials, _, _, _ := credential_profile_load(path, "prod", true)
+		testing.expectf(t, credentials.access_key == entry.key, "%q gave %q, want %q", text, credentials.access_key, entry.key)
+	}
+}
+
+@(test)
 credential_rejected_documents_are_not_cached :: proc(t: ^testing.T) {
 	saved := credential_test_env_push()
 	defer credential_test_env_pop(saved)

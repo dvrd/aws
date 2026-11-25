@@ -21,7 +21,7 @@ consumer_command :: proc(arguments: []string) -> int {
 		return fail("cannot create a work directory")
 	}
 	defer os.remove_all(work)
-	for name in ([]string{"aws", "surf", "http", "websocket", "async"}) {
+	for name in ([]string{"aws", "surf", "websocket", "async"}) {
 		source := fmt.aprintf("%s/%s", shared_source(), name)
 		if name == "aws" {
 			source = fmt.aprintf("%s/src", root_directory())

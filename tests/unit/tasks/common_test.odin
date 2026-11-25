@@ -57,6 +57,21 @@ children_report_their_exit_and_are_stopped_at_the_deadline :: proc(t: ^testing.T
 }
 
 @(test)
+children_stopped_at_the_deadline_never_finish :: proc(t: ^testing.T) {
+	context.allocator = context.temp_allocator
+	work, created := work_directory("tasks-stop")
+	testing.expect(t, created)
+	defer os.remove_all(work)
+	for i in 0 ..< 10 {
+		testing.expect_value(t, run({"/bin/sh", "-c", fmt.aprintf("sleep 1; touch %s/finished-%d", work, i)}, timeout = time.Millisecond), 124)
+	}
+	time.sleep(1500 * time.Millisecond)
+	for i in 0 ..< 10 {
+		testing.expectf(t, !os.exists(fmt.aprintf("%s/finished-%d", work, i)), "child %d finished after it was stopped", i)
+	}
+}
+
+@(test)
 an_exact_environment_is_all_a_child_sees :: proc(t: ^testing.T) {
 	context.allocator = context.temp_allocator
 	work, created := work_directory("tasks-env")

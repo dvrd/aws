@@ -152,8 +152,8 @@ is_mutation :: proc(verb: string) -> bool {
 
 fake_credentials :: proc(runner: ^Runner, scope: json.Object, deadline: time.Duration) -> (Environment, Failure) {
 	variables := make(map[string]string)
-	variables["AWS_ACCESS_KEY_ID"] = "fixture-access"
-	variables["AWS_SECRET_ACCESS_KEY"] = SECRET
+	variables["AWS_ACCESS_KEY_ID"] = strings.clone("fixture-access")
+	variables["AWS_SECRET_ACCESS_KEY"] = strings.clone(SECRET)
 	return {variables = variables}, .None
 }
 

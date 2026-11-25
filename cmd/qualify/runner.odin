@@ -298,13 +298,17 @@ scope_valid :: proc(scope: json.Object) -> Failure {
 			return .Scope_Resource_Invalid
 		}
 	}
-	_, write_set := boolean_of(scope, "allow_write")
+	allow_write, write_set := boolean_of(scope, "allow_write")
 	allow_ses, ses_set := boolean_of(scope, "allow_ses")
 	if !write_set || !ses_set {
 		return .Scope_Policy_Invalid
 	}
 	sender, sender_set := text_of(scope, "ses_sender")
 	if !sender_set || allow_ses && !sender_valid(sender) || !allow_ses && sender != "" {
+		return .SES_Policy_Invalid
+	}
+	// SES is sent only after the S3 round trip, which needs write access.
+	if allow_ses && !allow_write {
 		return .SES_Policy_Invalid
 	}
 	return .None
@@ -455,10 +459,10 @@ plan :: proc(runner: ^Runner) -> (result: json.Object, failure: Failure) {
 	scope_valid(scope) or_return
 	lock := lock_acquire(arguments.state_dir) or_return
 	defer lock_release(lock)
-	for name in ([]string{"state.json", "scope.json", "credential-policy.json"}) {
-		if path_present(state_file(runner, name)) {
-			return nil, .Run_Already_Exists
-		}
+	// state.json is written last and only ever replaced, never removed: without it
+	// no run started, and leftovers of an interrupted plan are replaced below.
+	if path_present(state_file(runner, "state.json")) {
+		return nil, .Run_Already_Exists
 	}
 	// Only this private copy, made from the bytes that were hashed, is ever run.
 	digest := probe_install(arguments.binary, arguments.state_dir) or_return
@@ -480,6 +484,12 @@ plan :: proc(runner: ^Runner) -> (result: json.Object, failure: Failure) {
 		atomic(arguments.state_dir, "credential-policy.json", policy) or_return
 		_, policy_bytes := read_private_bytes(state_file(runner, "credential-policy.json")) or_return
 		state["credential_policy_sha256"] = sha256_hex(policy_bytes)
+	}
+	if !bound {
+		policy_path := strings.clone_to_cstring(state_file(runner, "credential-policy.json"))
+		if posix.unlink(policy_path) != .OK && posix.errno() != .ENOENT {
+			return nil, .System
+		}
 	}
 	atomic(arguments.state_dir, "state.json", state) or_return
 	return receipt(arguments.state_dir, state)
@@ -918,6 +928,7 @@ action :: proc(
 	verb, phase, success: string,
 	environment: Environment,
 	deadline: time.Duration,
+	qualifies_s3 := false,
 ) -> (
 	stopped_with: json.Object,
 	stopped: bool,
@@ -942,6 +953,9 @@ action :: proc(
 		save(runner, state, phase, result) or_return
 		stopped_with = receipt(directory, state^, "NATIVE_ACTION_NOT_VERIFIED") or_return
 		return stopped_with, true, .None
+	}
+	if qualifies_s3 {
+		state["s3_qualified"] = true
 	}
 	save(runner, state, success, result) or_return
 	return nil, false, .None
@@ -1037,10 +1051,10 @@ run :: proc(runner: ^Runner) -> (result: json.Object, failure: Failure) {
 		}
 	}
 	if arguments.command != "send" {
-		if stopped_with, stopped := action(runner, &state, "delete", "DELETE_INTENT", "S3_COMPLETE", environment, deadline) or_return; stopped {
+		final := "S3_COMPLETE" if allow_ses else "COMPLETE"
+		if stopped_with, stopped := action(runner, &state, "delete", "DELETE_INTENT", final, environment, deadline, qualifies_s3 = true) or_return; stopped {
 			return stopped_with, .None
 		}
-		s3_complete(runner, &state) or_return
 	}
 	if allow_ses && arguments.command != "cleanup" {
 		if stopped_with, stopped := action(runner, &state, "ses", "SES_INTENT", "COMPLETE", environment, deadline) or_return; stopped {

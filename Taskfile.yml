@@ -20,6 +20,11 @@ tasks:
     cmds:
       - build/tasks deps {{.CLI_ARGS}}
 
+  hooks:install:
+    desc: Run task check on every commit before it is pushed
+    cmds:
+      - git config core.hooksPath .githooks
+
   build:
     desc: Type-check the library with vet and warnings as errors
     deps: [tasks]

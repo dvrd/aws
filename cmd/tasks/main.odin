@@ -17,6 +17,7 @@ Command :: struct {
 }
 
 COMMANDS := [?]Command {
+	{"deps", deps_command, "deps [--strict]", "Compare the shared collection with the pins in .krs/packages.json."},
 	{"check", check_command, "check", "Type-check the library and run every offline test."},
 	{"build", build_command, "build [Odin flags]", "Type-check the library with vet and warnings as errors."},
 	{
@@ -55,7 +56,7 @@ COMMANDS := [?]Command {
 	{
 		"release",
 		release_command,
-		"release [--stable]",
+		"release [--stable] [--allow-drift]",
 		"Check, then tag HEAD with the next semantic version. --stable publishes v1.0.0.",
 	},
 }
@@ -91,7 +92,7 @@ main :: proc() {
 
 // Everything offline, in the order a failure is cheapest to find. Each step is a
 // command of COMMANDS.
-CHECK_STEPS :: []string{"build", "test", "signatures", "consumer", "credentials", "loopback", "native-errors"}
+CHECK_STEPS :: []string{"deps", "build", "test", "signatures", "consumer", "credentials", "loopback", "native-errors"}
 
 check_command :: proc(arguments: []string) -> int {
 	for step in CHECK_STEPS {

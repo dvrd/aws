@@ -14,6 +14,7 @@ Read_Error_Kind :: enum {
 	Limit_Exceeded,
 	Size_Changed,
 	Allocation_Failed,
+	Not_Regular, // the path exists but is not a regular file (a directory, /dev/null)
 }
 Read_Error :: struct {
 	kind: Read_Error_Kind,
@@ -49,7 +50,7 @@ read_limited :: proc(
 	defer os.file_info_delete(info, context.allocator)
 
 	if info.type != .Regular {
-		return nil, {kind = .Invalid_Input}
+		return nil, {kind = .Not_Regular}
 	}
 	size := info.size
 

@@ -71,6 +71,9 @@ capture_child :: proc(
 	status: c.int
 	defer {
 		if !reaped {
+			// The child may not have called setsid yet, so its group may not exist:
+			// kill the child itself, then the group it may have started after exec.
+			posix.kill(child, .SIGKILL)
 			posix.killpg(child, .SIGKILL)
 			child_wait(child, &status, 5 * time.Second)
 		}

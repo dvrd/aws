@@ -54,7 +54,25 @@ s3_observe :: proc(started: time.Tick, ok: bool) {
 	}
 }
 
-S3_Result :: surf.Buffered_HTTP_Result
+// Whether a PUT or DELETE may have changed the object: Not_Sent means it surely
+// did not, Response_Received means S3 answered, Unknown means it may have.
+S3_Write_Effect :: enum u8 {
+	Unknown,
+	Not_Sent,
+	Response_Received,
+}
+
+// The outcome of a PUT or DELETE. status is S3's HTTP status, 0 when no answer
+// arrived; ok is error == .None. A 2xx answer whose body could not be read or
+// copied is Unavailable with effect Response_Received: S3 did store the object
+// but the caller cannot know, and a retry is safe because PUT and DELETE are
+// idempotent.
+S3_Result :: struct {
+	status: int,
+	ok:     bool,
+	error:  S3_Error,
+	effect: S3_Write_Effect,
+}
 
 load_s3_config :: proc() -> S3_Config {
 	config := S3_Config {
@@ -182,7 +200,7 @@ s3_request_timeout :: proc(body_size: i64, file: bool) -> i64 {
 	return min(S3_REQUEST_TIMEOUT_MS + (body_size / (1 << 20)) * 1000, S3_REQUEST_TIMEOUT_MAX_MS)
 }
 
-// Blocks the calling thread until S3 answers or its timeout passes: 15 seconds
+// The outcome is in S3_Result.error. Blocks the calling thread until S3 answers or its timeout passes: 15 seconds
 // plus 1 second per MiB of body, at most 120 seconds. Not for an
 // event-loop thread: build the request with s3_put_request and send it through
 // the server's own transport instead.
@@ -209,6 +227,7 @@ s3_put :: proc(
 }
 
 // Stream a file with a fixed buffer, avoiding an archive-sized allocation.
+// The outcome is in S3_Result.error; an unreadable file is Invalid_Input.
 // Blocks the calling thread while it hashes the file and then for up to 120
 // seconds of upload. Not for an event-loop thread, and it has no request builder:
 // run it on a worker.
@@ -221,12 +240,12 @@ s3_put_file :: proc(
 ) -> S3_Result {
 	file, error := os.open(path)
 	if error != nil {
-		return {}
+		return {error = .Invalid_Input, effect = .Not_Sent}
 	}
 	defer os.close(file)
 	size, size_error := os.file_size(file)
 	if size_error != nil {
-		return {}
+		return {error = .Invalid_Input, effect = .Not_Sent}
 	}
 	hasher: hash.Context
 	hash.init(&hasher, .SHA256)
@@ -234,7 +253,7 @@ s3_put_file :: proc(
 	for {
 		n, read_error := os.read(file, buffer[:])
 		if read_error != nil && read_error != io.Error.EOF {
-			return {}
+			return {error = .Invalid_Input, effect = .Not_Sent}
 		}
 		if n == 0 {
 			break
@@ -244,7 +263,7 @@ s3_put_file :: proc(
 	digest: [32]byte
 	hash.final(&hasher, digest[:])
 	if _, seek_error := os.seek(file, 0, .Start); seek_error != nil {
-		return {}
+		return {error = .Invalid_Input, effect = .Not_Sent}
 	}
 	return s3_object_request_at(
 		config,
@@ -261,7 +280,7 @@ s3_put_file :: proc(
 	)
 }
 
-// Blocks the calling thread until S3 answers or 15 seconds pass. Not for an
+// The outcome is in S3_Result.error. Blocks the calling thread until S3 answers or 15 seconds pass. Not for an
 // event-loop thread: use s3_delete_request there.
 s3_delete :: proc(
 	config: S3_Config,
@@ -296,7 +315,7 @@ s3_object_request_at :: proc(
 ) -> S3_Result {
 	// A file is signed by the digest of its contents, never as an empty payload.
 	if http_execute == nil || file != nil && file_digest == "" {
-		return {}
+		return {error = .Invalid_Input, effect = .Not_Sent}
 	}
 	url, headers, signed := s3_object_sign(
 		config,
@@ -309,7 +328,7 @@ s3_object_request_at :: proc(
 		file_digest,
 	)
 	if !signed {
-		return {}
+		return {error = .Invalid_Input, effect = .Not_Sent}
 	}
 	started := time.tick_now()
 	_, result := http_execute(
@@ -324,8 +343,16 @@ s3_object_request_at :: proc(
 			upload_size = file_size,
 		},
 	)
-	s3_observe(started, result.ok)
-	return result
+	error := s3_status_error(result.status)
+	if error == .None && !result.ok {
+		error = .Unavailable
+	}
+	effect := S3_Write_Effect.Response_Received
+	if result.status == 0 {
+		effect = .Not_Sent if result.error.write_effect == .Not_Sent else .Unknown
+	}
+	s3_observe(started, error == .None)
+	return {status = result.status, ok = error == .None, error = error, effect = effect}
 }
 
 // Validates and signs one object request without sending it. digest is the hex
@@ -735,13 +762,31 @@ s3_get_native_config :: proc(
 	}
 }
 
-S3_Get_Error :: enum u8 {
+// The outcome of an S3 request. Async callers classify their own responses with
+// s3_status_error.
+S3_Error :: enum u8 {
 	None,
-	Invalid_Input, // bad config/credentials/key/bound; nothing was sent
-	Not_Found, // 404: no object under the key
+	Invalid_Input, // bad config/credentials/key/bound or an unreadable local file; nothing was sent
+	Not_Found, // 404: no object under the key (or no such bucket)
 	Too_Large, // a 2xx object is above bytes_max; no bytes are returned
 	Rejected, // nonretryable status, including redirects and other 4xx
-	Unavailable, // transport failure, timeout, 408/429/5xx: retry later
+	Unavailable, // no answer, a timeout, 408/429/5xx: retry later
+}
+
+// The name s3_get has always used.
+S3_Get_Error :: S3_Error
+
+// The error for an HTTP status S3 answered with; 0 means no answer arrived.
+s3_status_error :: proc(status: int) -> S3_Error {
+	switch {
+	case status >= 200 && status <= 299:
+		return .None
+	case status == 404:
+		return .Not_Found
+	case status == 0 || status == 408 || status == 429 || status >= 500:
+		return .Unavailable
+	}
+	return .Rejected
 }
 
 // Per-operation executor for s3_get. On an error status whose body exceeds
@@ -802,14 +847,7 @@ s3_get :: proc(
 	// short for exceeding bytes_max: error answers are small XML documents that
 	// a tight bound can still exceed.
 	if status != 0 && !answered && (error == .None || error == .Too_Large) {
-		switch {
-		case status == 404:
-			error = .Not_Found
-		case status == 408 || status == 429 || status >= 500:
-			error = .Unavailable
-		case:
-			error = .Rejected
-		}
+		error = s3_status_error(status)
 	} else if error == .None && status == 0 {
 		error = .Unavailable
 	}

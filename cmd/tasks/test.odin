@@ -9,6 +9,10 @@ import "core:time"
 
 SUITE_TIMEOUT :: 300 * time.Second
 
+// Memory tracking is on in every test; with this a leak or a bad free fails the
+// test instead of only printing a warning.
+SUITE_MEMORY_FLAG :: "-define:ODIN_TEST_FAIL_ON_BAD_MEMORY=true"
+
 // The packages whose source files each need a unit test file of the same name:
 // the library in src/, and every program in cmd/<name>/. Their unit tests are in
 // tests/unit/ and tests/unit/<name>/, one <file>_test.odin for each <file>.odin.
@@ -125,7 +129,7 @@ layout_command :: proc(arguments: []string) -> int {
 test_command :: proc(arguments: []string) -> int {
 	selected := "all"
 	dependencies := shared_source()
-	flags := make([dynamic]string)
+	user := make([dynamic]string)
 	index := 0
 	options: for index < len(arguments) {
 		switch arguments[index] {
@@ -141,14 +145,12 @@ test_command :: proc(arguments: []string) -> int {
 		}
 		index += 1
 	}
-	has_output := false
 	for flag in arguments[min(index, len(arguments)):] {
 		if strings.has_prefix(flag, "-collection:shared=") {
 			dependencies = flag[len("-collection:shared="):]
 			continue
 		}
-		has_output ||= strings.has_prefix(flag, "-out:")
-		append(&flags, flag)
+		append(&user, flag)
 	}
 	if selected == "" || dependencies == "" || !os.is_directory(dependencies) {
 		return fail("no shared collection at %q", dependencies)
@@ -199,10 +201,7 @@ test_command :: proc(arguments: []string) -> int {
 	}
 	fmt.printf("Library aws from %s/src; dependencies from %s\n", root, dependencies)
 
-	append(&flags, fmt.aprintf("-collection:shared=%s", shared))
-	if !has_output {
-		append(&flags, fmt.aprintf("-out:%s/tests", work))
-	}
+	flags := suite_flags(user[:], shared, fmt.aprintf("%s/tests", work))
 	for suite, number in suites {
 		target := fmt.aprintf("%s/%s", repository, suite.relative)
 		if suite.home >= 0 {
@@ -215,12 +214,35 @@ test_command :: proc(arguments: []string) -> int {
 		fmt.printf("Testing %s\n", suite.relative)
 		command := make([dynamic]string)
 		append(&command, compiler_path(), "test", target)
-		append(&command, ..flags[:])
+		append(&command, ..flags)
 		if code := run(command[:], repository, SUITE_TIMEOUT); code != 0 {
 			return code
 		}
 	}
 	return 0
+}
+
+// The flags every suite gets after the user's: the memory check, unless the user
+// set it, and an output path, unless the user gave one.
+suite_flags :: proc(user: []string, shared, output: string) -> []string {
+	flags := make([dynamic]string)
+	has_output, has_memory_flag := false, false
+	for flag in user {
+		if strings.has_prefix(flag, "-collection:shared=") {
+			continue
+		}
+		has_output ||= strings.has_prefix(flag, "-out:")
+		has_memory_flag ||= strings.has_prefix(flag, "-define:ODIN_TEST_FAIL_ON_BAD_MEMORY=")
+		append(&flags, flag)
+	}
+	append(&flags, fmt.aprintf("-collection:shared=%s", shared))
+	if !has_memory_flag {
+		append(&flags, SUITE_MEMORY_FLAG)
+	}
+	if !has_output {
+		append(&flags, fmt.aprintf("-out:%s", output))
+	}
+	return flags[:]
 }
 
 // The package of home, its support files and the suite's files, in one directory.

@@ -177,6 +177,11 @@ aws_credentials_valid :: proc(value: AWS_Credentials) -> bool {
 
 Credential_Clock :: proc(data: rawptr) -> time.Time
 
+@(private)
+credential_clock_now :: proc(data: rawptr) -> time.Time {
+	return time.now()
+}
+
 // Enabled sources. Unsupported mechanisms are not members; they return a typed error.
 Credential_Mode :: enum {
 	Environment,
@@ -279,6 +284,19 @@ Credential_Cache :: struct {
 	waiters:         int,
 	live_readers:    int,
 	closed:          bool,
+}
+
+// What one resolution needs. The cache keeps one; aws_credentials builds one per call.
+Credential_Resolver :: struct {
+	execute:    HTTP_Execute,
+	clock:      Credential_Clock,
+	clock_data: rawptr,
+	modes:      Credential_Modes,
+	allocator:  mem.Allocator, // the snapshot's allocator
+}
+
+credential_resolver_of :: proc(cache: ^Credential_Cache) -> Credential_Resolver {
+	return {cache.execute, cache.clock, cache.clock_data, cache.modes, cache.allocator}
 }
 
 credential_cache_init :: proc(
@@ -452,9 +470,10 @@ credential_refresh_run :: proc(cache: ^Credential_Cache) -> (target: u64) {
 	cache.refresh_active = true
 	cache.refresh_attempt += 1
 	target = cache.refresh_attempt
+	resolver := credential_resolver_of(cache)
 	sync.mutex_unlock(&cache.mutex)
 
-	snap, resolve_error := credential_resolve(cache)
+	snap, resolve_error := credential_resolve(resolver)
 	now := cache.clock(cache.clock_data)
 
 	sync.mutex_lock(&cache.mutex)
@@ -733,12 +752,12 @@ credential_snapshot_new :: proc(
 }
 
 credential_resolve :: proc(
-	cache: ^Credential_Cache,
+	resolver: Credential_Resolver,
 ) -> (
 	snap: ^Credential_Snapshot,
 	error: Credential_Error,
 ) {
-	if .Environment in cache.modes {
+	if .Environment in resolver.modes {
 		access := credential_env("AWS_ACCESS_KEY_ID")
 		secret := credential_env("AWS_SECRET_ACCESS_KEY")
 		token := credential_env("AWS_SESSION_TOKEN")
@@ -761,14 +780,14 @@ credential_resolve :: proc(
 				if !parsed {
 					return nil, {kind = .Incomplete, source = .Environment}
 				}
-				if time.diff(cache.clock(cache.clock_data), expires) <= CREDENTIAL_EXPIRY_SKEW {
+				if time.diff(resolver.clock(resolver.clock_data), expires) <= CREDENTIAL_EXPIRY_SKEW {
 					return nil, {kind = .Expired, source = .Environment}
 				}
 			}
 
 			// The snapshot copies the triple before the deferred wipes run.
 			return credential_snapshot_new(
-				cache.allocator,
+				resolver.allocator,
 				.Environment,
 				access,
 				secret,
@@ -786,7 +805,7 @@ credential_resolve :: proc(
 		return nil, {kind = .Unsupported, source = .Environment, unsupported = .Web_Identity}
 	}
 
-	if .Profile in cache.modes {
+	if .Profile in resolver.modes {
 		// Keep env copies distinct from literals and formatted paths so wiping cannot touch them.
 		profile_env := credential_env("AWS_PROFILE")
 		defer credential_wipe_text(profile_env)
@@ -818,7 +837,7 @@ credential_resolve :: proc(
 			}
 
 			return credential_snapshot_new(
-				cache.allocator,
+				resolver.allocator,
 				.Profile,
 				loaded.access_key,
 				loaded.secret_key,
@@ -836,7 +855,7 @@ credential_resolve :: proc(
 		return nil, {kind = .Unsupported, source = .ECS, unsupported = .ECS_Full_URI}
 	}
 
-	if .ECS in cache.modes {
+	if .ECS in resolver.modes {
 		relative := credential_env("AWS_CONTAINER_CREDENTIALS_RELATIVE_URI")
 		defer credential_wipe_text(relative)
 
@@ -846,7 +865,7 @@ credential_resolve :: proc(
 			}
 
 			return credential_fetch_document(
-				cache,
+				resolver,
 				.ECS,
 				fmt.tprintf("http://169.254.170.2%s", relative),
 				nil,
@@ -854,27 +873,27 @@ credential_resolve :: proc(
 		}
 	}
 
-	if credential_ec2_probe_permitted(cache.modes) {
-		return credential_fetch_ec2(cache)
+	if credential_ec2_probe_permitted(resolver.modes) {
+		return credential_fetch_ec2(resolver)
 	}
 
 	return nil, {kind = .Unavailable}
 }
 
 credential_fetch_ec2 :: proc(
-	cache: ^Credential_Cache,
+	resolver: Credential_Resolver,
 ) -> (
 	snap: ^Credential_Snapshot,
 	error: Credential_Error,
 ) {
 	reply, ok := credential_metadata_call(
-		cache.execute,
+		resolver.execute,
 		"PUT",
 		"http://169.254.169.254/latest/api/token",
 		{"X-aws-ec2-metadata-token-ttl-seconds: 60"},
 	)
 	token := string(reply)
-	defer credential_reply_wipe(cache.execute, reply)
+	defer credential_reply_wipe(resolver.execute, reply)
 
 	if !ok ||
 	   token == "" ||
@@ -886,7 +905,7 @@ credential_fetch_ec2 :: proc(
 	token_header := fmt.tprintf("X-aws-ec2-metadata-token: %s", token)
 	defer credential_wipe_text(token_header)
 	role, role_ok := credential_metadata_call(
-		cache.execute,
+		resolver.execute,
 		"GET",
 		"http://169.254.169.254/latest/meta-data/iam/security-credentials/",
 		{token_header},
@@ -900,7 +919,7 @@ credential_fetch_ec2 :: proc(
 	}
 
 	return credential_fetch_document(
-		cache,
+		resolver,
 		.EC2,
 		fmt.tprintf(
 			"http://169.254.169.254/latest/meta-data/iam/security-credentials/%s",
@@ -911,7 +930,7 @@ credential_fetch_ec2 :: proc(
 }
 
 credential_fetch_document :: proc(
-	cache: ^Credential_Cache,
+	resolver: Credential_Resolver,
 	source: Credential_Source,
 	url: string,
 	headers: []string,
@@ -922,9 +941,9 @@ credential_fetch_document :: proc(
 	if !credential_metadata_url_permitted(url) {
 		return nil, {kind = .Unavailable, source = source}
 	}
-	data, ok := credential_metadata_call(cache.execute, "GET", url, headers)
+	data, ok := credential_metadata_call(resolver.execute, "GET", url, headers)
 	// The reply is the document that carries the secret, not only its decoded copy.
-	defer credential_reply_wipe(cache.execute, data)
+	defer credential_reply_wipe(resolver.execute, data)
 	document: struct {
 		code:       string `json:"Code"`,
 		access:     string `json:"AccessKeyId"`,
@@ -954,12 +973,12 @@ credential_fetch_document :: proc(
 	if !expires_ok {
 		return nil, {kind = .Unavailable, source = source}
 	}
-	now := cache.clock(cache.clock_data)
+	now := resolver.clock(resolver.clock_data)
 	if time.diff(now, expires) <= CREDENTIAL_EXPIRY_SKEW {
 		return nil, {kind = .Expired, source = source}
 	}
 	return credential_snapshot_new(
-		cache.allocator,
+		resolver.allocator,
 		source,
 		document.access,
 		document.secret,

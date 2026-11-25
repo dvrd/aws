@@ -6,6 +6,7 @@ import "core:mem"
 import "core:os"
 import "core:strings"
 import "core:sync"
+import "core:thread"
 import "core:time"
 import "shared:surf"
 
@@ -16,20 +17,39 @@ import "shared:surf"
 // returns the secret in strings that stay in context.temp_allocator, unwiped,
 // until the caller resets it.
 //
-// A server uses a Credential_Cache: credential_cache_init once at startup, then
-// credential_refresh from a maintenance thread or timer, and credential_lease_cached
-// with credential_lease_release around each signing in a request handler. The
-// cache keeps one copy of the secret, wipes it when it is replaced and no lease
-// holds it, and hands out leases without I/O.
+// A server uses a Credential_Cache: credential_cache_init once at startup with
+// credential_clock_wall, a Credential_Refresher (credential_refresher_start) that
+// calls credential_refresh from its own thread, and credential_lease_cached with
+// credential_lease_release around each signing in a request handler, passing
+// credential_lease_credentials(lease) to the signer. The cache keeps one copy of
+// the secret, wipes it when it is replaced and no lease holds it, and hands out
+// leases without I/O.
+//
+//   cache: aws.Credential_Cache
+//   aws.credential_cache_init(&cache, aws.http_execute_default, aws.credential_clock_wall)
+//   refresher: aws.Credential_Refresher
+//   aws.credential_refresher_start(&refresher, &cache)
+//
+//   // in a request handler:
+//   lease, error := aws.credential_lease_cached(&cache)
+//   if error.kind != .None { /* 503: credentials not ready */ }
+//   defer aws.credential_lease_release(&cache, &lease)
+//   result := aws.s3_put(config, aws.credential_lease_credentials(lease), key, body, type)
+//
+//   // at shutdown, after handlers stop:
+//   aws.credential_refresher_stop(&refresher)
+//   aws.credential_cache_destroy(&cache)
 //
 //   credential_lease_cached   request handler: never blocks, never does I/O
+//   credential_refresher_*    startup and shutdown: one thread runs credential_refresh
 //   credential_refresh        maintenance only: blocks for the provider's calls
 //   credential_lease          startup or a worker: blocks when a refresh is needed
 //   aws_credentials           scripts only
 
 // Uncached resolution for scripts; servers use a Credential_Cache (see above).
-// Strings borrow context.temp_allocator and are not wiped. No expiry and no cache:
-// a later call observes environment changes. Incomplete configured material fails closed.
+// Strings borrow context.temp_allocator and are not wiped. No cache: a later call
+// observes environment changes. It applies the cache's rules (sources, bounds,
+// expiry against the wall clock, unsupported mechanisms refused) through the same resolver.
 // Blocks for up to three metadata calls of 1500 ms each.
 aws_credentials :: proc() -> (credentials: AWS_Credentials, ok: bool) {
 	return aws_credentials_with_http(http_execute_default)
@@ -44,119 +64,25 @@ aws_credentials_with_http :: proc(
 	if http_execute == nil {
 		return
 	}
-
-	credentials = {
-		access_key    = os.get_env("AWS_ACCESS_KEY_ID", context.temp_allocator),
-		secret_key    = os.get_env("AWS_SECRET_ACCESS_KEY", context.temp_allocator),
-		session_token = os.get_env("AWS_SESSION_TOKEN", context.temp_allocator),
-	}
-
-	if credentials.access_key != "" ||
-	   credentials.secret_key != "" ||
-	   credentials.session_token != "" {
-		return credentials, aws_credentials_valid(credentials)
-	}
-
-	profile := os.get_env("AWS_PROFILE", context.temp_allocator)
-	if profile == "" {
-		profile = "default"
-	}
-	path := os.get_env("AWS_SHARED_CREDENTIALS_FILE", context.temp_allocator)
-
-	if path == "" {
-		path = fmt.tprintf("%s/.aws/credentials", os.get_env("HOME", context.temp_allocator))
-	}
-
-	file_credentials, _, _, file_error := credential_profile_load(path, profile, false)
-
-	if file_error.kind != .None && file_error.kind != .Open_Failed {
-		return
-	}
-
-	if file_credentials.access_key != "" ||
-	   file_credentials.secret_key != "" ||
-	   file_credentials.session_token != "" {
-		return file_credentials, aws_credentials_valid(file_credentials)
-	}
-
-	relative := os.get_env("AWS_CONTAINER_CREDENTIALS_RELATIVE_URI", context.temp_allocator)
-	url, token := "", ""
-
-	if relative != "" {
-		// The same rule the cache applies: one path on the fixed link-local host.
-		if !credential_relative_uri_ok(relative) {
-			return
-		}
-		url = fmt.tprintf("http://169.254.170.2%s", relative)
-	} else {
-		if os.get_env("AWS_EC2_METADATA_DISABLED", context.temp_allocator) == "true" {
-			return
-		}
-		reply, result := http_execute(
-			{
-				method = "PUT",
-				url = "http://169.254.169.254/latest/api/token",
-				headers = {"X-aws-ec2-metadata-token-ttl-seconds: 60"},
-				allow_http = true,
-				timeout_ms = 1500,
-			},
-		)
-		if !result.ok {
-			return
-		}
-		token = string(reply)
-		if token == "" ||
-		   len(token) > CREDENTIAL_IMDS_TOKEN_MAX ||
-		   !credential_text_printable(token) {
-			return
-		}
-		role, role_result := http_execute(
-			{
-				method = "GET",
-				url = "http://169.254.169.254/latest/meta-data/iam/security-credentials/",
-				headers = {fmt.tprintf("X-aws-ec2-metadata-token: %s", token)},
-				allow_http = true,
-				timeout_ms = 1500,
-			},
-		)
-		role_name := strings.trim_space(string(role))
-
-		if !role_result.ok ||
-		   role_name == "" ||
-		   len(role_name) > CREDENTIAL_ROLE_MAX ||
-		   strings.contains_any(role_name, "/?#\\@") ||
-		   !credential_text_printable(role_name) {
-			return
-		}
-
-		url = fmt.tprintf(
-			"http://169.254.169.254/latest/meta-data/iam/security-credentials/%s",
-			role_name,
-		)
-	}
-
-	headers: []string
-	if token != "" {
-		headers = {fmt.tprintf("X-aws-ec2-metadata-token: %s", token)}
-	}
-	data, result := http_execute(
-		{method = "GET", url = url, headers = headers, allow_http = true, timeout_ms = 1500},
+	snap, failure := credential_resolve(
+		{
+			execute = http_execute,
+			clock = credential_clock_wall,
+			modes = CREDENTIAL_MODES_SUPPORTED,
+			allocator = context.allocator,
+		},
 	)
-	if !result.ok {
+	if failure.kind != .None || snap == nil {
 		return
 	}
-	document: struct {
-		access: string `json:"AccessKeyId"`,
-		secret: string `json:"SecretAccessKey"`,
-		token:  string `json:"Token"`,
+	// The caller gets copies in the temp allocator; the snapshot is wiped now.
+	defer credential_snapshot_erase(nil, snap)
+	credentials = {
+		access_key    = strings.clone(snap.access_key, context.temp_allocator),
+		secret_key    = strings.clone(snap.secret_key, context.temp_allocator),
+		session_token = strings.clone(snap.session_token, context.temp_allocator),
 	}
-
-	if json.unmarshal(data, &document, allocator = context.temp_allocator) != nil {
-		return
-	}
-	credentials = {document.access, document.secret, document.token}
-
-	return credentials, aws_credentials_valid(credentials)
+	return credentials, true
 }
 
 aws_credentials_valid :: proc(value: AWS_Credentials) -> bool {
@@ -164,12 +90,11 @@ aws_credentials_valid :: proc(value: AWS_Credentials) -> bool {
 		return false
 	}
 
-	// The key and the token are sent as header values, so no control character.
+	// The keys and the token go into header values as written: visible ASCII only,
+	// so no side can trim or reject a byte the signature covers.
 	for text in ([]string{value.access_key, value.secret_key, value.session_token}) {
-		for index in 0 ..< len(text) {
-			if text[index] < 0x20 || text[index] == 0x7f {
-				return false
-			}
+		if !text_visible(text) {
+			return false
 		}
 	}
 
@@ -177,6 +102,12 @@ aws_credentials_valid :: proc(value: AWS_Credentials) -> bool {
 }
 
 Credential_Clock :: proc(data: rawptr) -> time.Time
+
+// The real time, for a Credential_Cache outside tests: credential_cache_init(&cache,
+// http_execute_default, credential_clock_wall).
+credential_clock_wall :: proc(_: rawptr) -> time.Time {
+	return time.now()
+}
 
 // Enabled sources. Unsupported mechanisms are not members; they return a typed error.
 Credential_Mode :: enum {
@@ -261,6 +192,10 @@ CREDENTIAL_ACCESS_MAX :: 128
 CREDENTIAL_SECRET_MAX :: 256
 CREDENTIAL_TOKEN_MAX :: 8192
 CREDENTIAL_ROLE_MAX :: 128
+// Temp memory one resolution may use: a 64 KiB profile, three metadata replies
+// of up to 64 KiB, and the decoded document, with room to spare. Zeroed in full
+// and freed before the refresh returns.
+CREDENTIAL_SCRATCH_BYTES :: 1 << 20
 CREDENTIAL_IMDS_TOKEN_MAX :: 4096
 CREDENTIAL_RELATIVE_MAX :: 1024
 
@@ -277,9 +212,23 @@ Credential_Cache :: struct {
 	refresh_attempt: u64,
 	failed_attempt:  u64,
 	refresh_error:   Credential_Error,
+	expired_source:  Credential_Source, // source of credentials dropped for expiry; None once new ones are published
 	waiters:         int,
 	live_readers:    int,
 	closed:          bool,
+}
+
+// What one resolution needs. The cache keeps one; aws_credentials builds one per call.
+Credential_Resolver :: struct {
+	execute:    HTTP_Execute,
+	clock:      Credential_Clock,
+	clock_data: rawptr,
+	modes:      Credential_Modes,
+	allocator:  mem.Allocator, // the snapshot's allocator
+}
+
+credential_resolver_of :: proc(cache: ^Credential_Cache) -> Credential_Resolver {
+	return {cache.execute, cache.clock, cache.clock_data, cache.modes, cache.allocator}
 }
 
 credential_cache_init :: proc(
@@ -306,6 +255,7 @@ credential_cache_init :: proc(
 	cache.refresh_attempt = 0
 	cache.failed_attempt = 0
 	cache.refresh_error = {}
+	cache.expired_source = .None
 	cache.waiters = 0
 	cache.live_readers = 0
 	cache.closed = false
@@ -397,6 +347,9 @@ credential_lease_cached :: proc(
 	if cache.snapshot != nil {
 		return {}, {kind = .Expired, source = cache.snapshot.source}
 	}
+	if cache.expired_source != .None {
+		return {}, {kind = .Expired, source = cache.expired_source}
+	}
 	return {}, {kind = .Unavailable}
 }
 
@@ -453,9 +406,24 @@ credential_refresh_run :: proc(cache: ^Credential_Cache) -> (target: u64) {
 	cache.refresh_active = true
 	cache.refresh_attempt += 1
 	target = cache.refresh_attempt
+	resolver := credential_resolver_of(cache)
 	sync.mutex_unlock(&cache.mutex)
 
-	snap, resolve_error := credential_resolve(cache)
+	scratch, scratch_error := make([]byte, CREDENTIAL_SCRATCH_BYTES, resolver.allocator)
+	snap: ^Credential_Snapshot
+	resolve_error: Credential_Error
+	if scratch_error != nil {
+		resolve_error = {kind = .Allocation_Failed}
+	} else {
+		arena: mem.Arena
+		mem.arena_init(&arena, scratch)
+		{
+			context.temp_allocator = mem.arena_allocator(&arena)
+			snap, resolve_error = credential_resolve(resolver)
+		}
+		mem.zero_explicit(raw_data(scratch), len(scratch))
+		delete(scratch, resolver.allocator)
+	}
 	now := cache.clock(cache.clock_data)
 
 	sync.mutex_lock(&cache.mutex)
@@ -467,6 +435,7 @@ credential_refresh_run :: proc(cache: ^Credential_Cache) -> (target: u64) {
 		snap.resolved = now
 		credential_snapshot_retire(cache, cache.snapshot)
 		cache.snapshot = snap
+		cache.expired_source = .None
 		snap = nil
 		cache.failed_attempt = 0
 		cache.refresh_error = {}
@@ -485,6 +454,7 @@ credential_refresh_run :: proc(cache: ^Credential_Cache) -> (target: u64) {
 
 		if cache.snapshot != nil && !credential_snapshot_usable(cache.snapshot, now) {
 			stale := cache.snapshot
+			cache.expired_source = stale.source
 			cache.snapshot = nil
 			credential_snapshot_retire(cache, stale)
 		}
@@ -628,6 +598,137 @@ credential_lease_release :: proc(cache: ^Credential_Cache, lease: ^Credential_Le
 	}
 }
 
+// The lease's credentials in the shape every signer takes. They BORROW the
+// lease: valid only until credential_lease_release(cache, &lease). Sign with
+// them, then release; never store them, put them in a struct that outlives the
+// release, or hand them to another thread. A zero lease gives zero credentials,
+// which every signer refuses.
+credential_lease_credentials :: proc(lease: Credential_Lease) -> AWS_Credentials {
+	return {lease.access_key, lease.secret_key, lease.session_token}
+}
+
+// Keeps a Credential_Cache fresh from its own thread: credential_refresh at
+// start, then every interval, until credential_refresher_stop. interval must be
+// positive and shorter than margin, so credentials are replaced before they
+// enter the skew. The cache must outlive the refresher; stop it before
+// credential_cache_destroy (destroy returns Busy while a refresh runs).
+Credential_Refresher :: struct {
+	cache:    ^Credential_Cache,
+	interval: time.Duration,
+	margin:   time.Duration,
+	thread:   ^thread.Thread,
+	mutex:    sync.Mutex,
+	cond:     sync.Cond,
+	stopping: bool, // guarded by mutex
+	attempts: int, // guarded by mutex
+	last:     Credential_Error, // guarded by mutex; the latest refresh result
+}
+
+// How often a Credential_Refresher calls credential_refresh by default; well
+// inside CREDENTIAL_REFRESH_MARGIN.
+CREDENTIAL_REFRESH_INTERVAL :: time.Minute
+
+// Starts the refresher's thread, which refreshes at once and then every
+// interval. Does not block: the first refresh runs on the new thread, so a
+// caller that needs credentials before serving polls credential_lease_cached or
+// uses credential_lease. Call it from the thread that owns the refresher, once;
+// it returns Invalid_Argument for a nil refresher or cache, a refresher already
+// started, interval <= 0, margin < 0 or interval >= margin, and
+// Allocation_Failed when the thread cannot be created.
+credential_refresher_start :: proc(
+	refresher: ^Credential_Refresher,
+	cache: ^Credential_Cache,
+	interval: time.Duration = CREDENTIAL_REFRESH_INTERVAL,
+	margin: time.Duration = CREDENTIAL_REFRESH_MARGIN,
+) -> Credential_Error {
+	if refresher == nil ||
+	   cache == nil ||
+	   refresher.thread != nil ||
+	   interval <= 0 ||
+	   margin < 0 ||
+	   interval >= margin {
+		return {kind = .Invalid_Argument}
+	}
+	refresher.cache = cache
+	refresher.interval = interval
+	refresher.margin = margin
+	refresher.stopping = false
+	refresher.attempts = 0
+	refresher.last = {}
+	refresher.thread = thread.create_and_start_with_data(refresher, credential_refresher_run)
+	if refresher.thread == nil {
+		return {kind = .Allocation_Failed}
+	}
+	return {}
+}
+
+// The refresher's thread. It ends when stop is requested, or after the cache
+// reports Closed (destroyed under it).
+@(private)
+credential_refresher_run :: proc(data: rawptr) {
+	refresher := cast(^Credential_Refresher)data
+	for {
+		error := credential_refresh(refresher.cache, refresher.margin)
+		// The refresh's temp allocations end here, so a long-lived thread does not grow its temp allocator.
+		free_all(context.temp_allocator)
+
+		sync.mutex_lock(&refresher.mutex)
+		refresher.attempts += 1
+		refresher.last = error
+		if error.kind == .Closed {
+			sync.mutex_unlock(&refresher.mutex)
+			return
+		}
+		// Cond waits can wake early or spuriously; wait until the deadline or a stop.
+		deadline := time.tick_add(time.tick_now(), refresher.interval)
+		for !refresher.stopping {
+			remaining := time.tick_diff(time.tick_now(), deadline)
+			if remaining <= 0 {
+				break
+			}
+			sync.cond_wait_with_timeout(&refresher.cond, &refresher.mutex, remaining)
+		}
+		stopping := refresher.stopping
+		sync.mutex_unlock(&refresher.mutex)
+		if stopping {
+			return
+		}
+	}
+}
+
+// Stops and joins the thread. Waits at most for one refresh already in progress
+// (the provider's calls, up to 4.5 s). Safe to call on a refresher never started.
+// Call it from the thread that started the refresher, or from one other thread
+// at a time; afterwards the refresher may be started again.
+credential_refresher_stop :: proc(refresher: ^Credential_Refresher) {
+	if refresher == nil || refresher.thread == nil {
+		return
+	}
+	sync.mutex_lock(&refresher.mutex)
+	refresher.stopping = true
+	sync.cond_broadcast(&refresher.cond)
+	sync.mutex_unlock(&refresher.mutex)
+	thread.join(refresher.thread)
+	thread.destroy(refresher.thread)
+	refresher.thread = nil
+}
+
+// The number of refreshes run and the latest result, for health checks. Does
+// not block beyond the refresher's mutex; any thread may call it.
+credential_refresher_status :: proc(
+	refresher: ^Credential_Refresher,
+) -> (
+	attempts: int,
+	last: Credential_Error,
+) {
+	if refresher == nil {
+		return 0, {kind = .Invalid_Argument}
+	}
+	sync.mutex_lock(&refresher.mutex)
+	defer sync.mutex_unlock(&refresher.mutex)
+	return refresher.attempts, refresher.last
+}
+
 credential_cancelled :: proc(cancel: ^Credential_Cancel) -> bool {
 	if cancel == nil {
 		return false
@@ -734,12 +835,12 @@ credential_snapshot_new :: proc(
 }
 
 credential_resolve :: proc(
-	cache: ^Credential_Cache,
+	resolver: Credential_Resolver,
 ) -> (
 	snap: ^Credential_Snapshot,
 	error: Credential_Error,
 ) {
-	if .Environment in cache.modes {
+	if .Environment in resolver.modes {
 		access := credential_env("AWS_ACCESS_KEY_ID")
 		secret := credential_env("AWS_SECRET_ACCESS_KEY")
 		token := credential_env("AWS_SESSION_TOKEN")
@@ -762,14 +863,14 @@ credential_resolve :: proc(
 				if !parsed {
 					return nil, {kind = .Incomplete, source = .Environment}
 				}
-				if time.diff(cache.clock(cache.clock_data), expires) <= CREDENTIAL_EXPIRY_SKEW {
+				if time.diff(resolver.clock(resolver.clock_data), expires) <= CREDENTIAL_EXPIRY_SKEW {
 					return nil, {kind = .Expired, source = .Environment}
 				}
 			}
 
 			// The snapshot copies the triple before the deferred wipes run.
 			return credential_snapshot_new(
-				cache.allocator,
+				resolver.allocator,
 				.Environment,
 				access,
 				secret,
@@ -787,7 +888,7 @@ credential_resolve :: proc(
 		return nil, {kind = .Unsupported, source = .Environment, unsupported = .Web_Identity}
 	}
 
-	if .Profile in cache.modes {
+	if .Profile in resolver.modes {
 		// Keep env copies distinct from literals and formatted paths so wiping cannot touch them.
 		profile_env := credential_env("AWS_PROFILE")
 		defer credential_wipe_text(profile_env)
@@ -805,7 +906,9 @@ credential_resolve :: proc(
 		loaded, unsupported, data, read_error := credential_profile_load(path, profile, true)
 		defer credential_wipe_text(string(data))
 
-		if read_error.kind != .None && read_error.kind != .Open_Failed {
+		// A missing path, or one that is not a regular file (/dev/null is a common
+		// way to turn the file off), means no profile; anything else fails closed.
+		if read_error.kind != .None && read_error.kind != .Open_Failed && read_error.kind != .Not_Regular {
 			return nil, {kind = .Unavailable, source = .Profile}
 		}
 
@@ -819,7 +922,7 @@ credential_resolve :: proc(
 			}
 
 			return credential_snapshot_new(
-				cache.allocator,
+				resolver.allocator,
 				.Profile,
 				loaded.access_key,
 				loaded.secret_key,
@@ -837,7 +940,7 @@ credential_resolve :: proc(
 		return nil, {kind = .Unsupported, source = .ECS, unsupported = .ECS_Full_URI}
 	}
 
-	if .ECS in cache.modes {
+	if .ECS in resolver.modes {
 		relative := credential_env("AWS_CONTAINER_CREDENTIALS_RELATIVE_URI")
 		defer credential_wipe_text(relative)
 
@@ -847,7 +950,7 @@ credential_resolve :: proc(
 			}
 
 			return credential_fetch_document(
-				cache,
+				resolver,
 				.ECS,
 				fmt.tprintf("http://169.254.170.2%s", relative),
 				nil,
@@ -855,27 +958,27 @@ credential_resolve :: proc(
 		}
 	}
 
-	if credential_ec2_probe_permitted(cache.modes) {
-		return credential_fetch_ec2(cache)
+	if credential_ec2_probe_permitted(resolver.modes) {
+		return credential_fetch_ec2(resolver)
 	}
 
 	return nil, {kind = .Unavailable}
 }
 
 credential_fetch_ec2 :: proc(
-	cache: ^Credential_Cache,
+	resolver: Credential_Resolver,
 ) -> (
 	snap: ^Credential_Snapshot,
 	error: Credential_Error,
 ) {
 	reply, ok := credential_metadata_call(
-		cache.execute,
+		resolver.execute,
 		"PUT",
 		"http://169.254.169.254/latest/api/token",
 		{"X-aws-ec2-metadata-token-ttl-seconds: 60"},
 	)
 	token := string(reply)
-	defer credential_reply_wipe(cache.execute, reply)
+	defer credential_reply_wipe(resolver.execute, reply)
 
 	if !ok ||
 	   token == "" ||
@@ -887,7 +990,7 @@ credential_fetch_ec2 :: proc(
 	token_header := fmt.tprintf("X-aws-ec2-metadata-token: %s", token)
 	defer credential_wipe_text(token_header)
 	role, role_ok := credential_metadata_call(
-		cache.execute,
+		resolver.execute,
 		"GET",
 		"http://169.254.169.254/latest/meta-data/iam/security-credentials/",
 		{token_header},
@@ -901,7 +1004,7 @@ credential_fetch_ec2 :: proc(
 	}
 
 	return credential_fetch_document(
-		cache,
+		resolver,
 		.EC2,
 		fmt.tprintf(
 			"http://169.254.169.254/latest/meta-data/iam/security-credentials/%s",
@@ -912,7 +1015,7 @@ credential_fetch_ec2 :: proc(
 }
 
 credential_fetch_document :: proc(
-	cache: ^Credential_Cache,
+	resolver: Credential_Resolver,
 	source: Credential_Source,
 	url: string,
 	headers: []string,
@@ -923,9 +1026,9 @@ credential_fetch_document :: proc(
 	if !credential_metadata_url_permitted(url) {
 		return nil, {kind = .Unavailable, source = source}
 	}
-	data, ok := credential_metadata_call(cache.execute, "GET", url, headers)
+	data, ok := credential_metadata_call(resolver.execute, "GET", url, headers)
 	// The reply is the document that carries the secret, not only its decoded copy.
-	defer credential_reply_wipe(cache.execute, data)
+	defer credential_reply_wipe(resolver.execute, data)
 	document: struct {
 		code:       string `json:"Code"`,
 		access:     string `json:"AccessKeyId"`,
@@ -955,12 +1058,12 @@ credential_fetch_document :: proc(
 	if !expires_ok {
 		return nil, {kind = .Unavailable, source = source}
 	}
-	now := cache.clock(cache.clock_data)
+	now := resolver.clock(resolver.clock_data)
 	if time.diff(now, expires) <= CREDENTIAL_EXPIRY_SKEW {
 		return nil, {kind = .Expired, source = source}
 	}
 	return credential_snapshot_new(
-		cache.allocator,
+		resolver.allocator,
 		source,
 		document.access,
 		document.secret,
@@ -1045,13 +1148,7 @@ credential_relative_uri_ok :: proc(relative: string) -> bool {
 // Printable ASCII only: no space, control character or byte above 0x7e. What the
 // metadata service returns is put into URLs and header values.
 credential_text_printable :: proc(text: string) -> bool {
-	for index in 0 ..< len(text) {
-		if text[index] <= 0x20 || text[index] > 0x7e {
-			return false
-		}
-	}
-
-	return true
+	return text_visible(text)
 }
 
 credential_bounded_valid :: proc(value: AWS_Credentials) -> bool {

@@ -95,9 +95,14 @@ regular_file_boundaries_and_rejections :: proc(t: ^testing.T) {
 	testing.expect_value(t, read_error.kind, .Limit_Exceeded)
 	testing.expect(t, data == nil && state.requested == 0, "oversize rejected before payload allocation")
 
-	for invalid in ([]string{"", "invalid\x00path", directory}) {
+	for invalid in ([]string{"", "invalid\x00path"}) {
 		_, e := read_limited(invalid, 65536)
 		testing.expect_value(t, e.kind, .Invalid_Input)
+	}
+
+	for not_regular in ([]string{directory, "/dev/null"}) {
+		_, e := read_limited(not_regular, 65536)
+		testing.expect_value(t, e.kind, .Not_Regular)
 	}
 
 	_, missing := read_limited(fmt.tprintf("%s/missing", directory), 65536)

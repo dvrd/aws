@@ -6,9 +6,11 @@ import "core:mem"
 import "core:strings"
 
 // The SHA-256 of an empty payload, as SigV4 writes it.
+@(private)
 EMPTY_PAYLOAD_SHA256 :: "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
 
 // One header that is signed, with a lower-case name and its value as sent.
+@(private)
 Sigv4_Header :: struct {
 	name, value: string,
 }
@@ -16,6 +18,7 @@ Sigv4_Header :: struct {
 // What SigV4 signs. headers must be sorted by name; path and query are already
 // URI-encoded the way they are sent. payload_hash is the hex SHA-256 of the
 // payload, or "UNSIGNED-PAYLOAD".
+@(private)
 Sigv4_Input :: struct {
 	service, region, method, path, query: string,
 	headers:                              []Sigv4_Header,
@@ -28,6 +31,7 @@ Sigv4_Input :: struct {
 // canonical request is fed into a SHA-256 context piece by piece and never built
 // as a string. The secret and the keys derived from it stay on the stack and are
 // erased before returning. A stamp shorter than its date leaves signature zeroed.
+@(private)
 sigv4_sign :: proc(secret: string, input: Sigv4_Input, signature: ^[64]u8) {
 	signature^ = {}
 	if len(input.stamp) < 8 {
@@ -63,6 +67,7 @@ sigv4_sign :: proc(secret: string, input: Sigv4_Input, signature: ^[64]u8) {
 }
 
 // Writes the credential scope, YYYYMMDD/region/service/aws4_request, into builder.
+@(private)
 sigv4_scope_write :: proc(builder: ^strings.Builder, stamp, region, service: string) {
 	strings.write_string(builder, stamp[:8])
 	strings.write_byte(builder, '/')
@@ -73,12 +78,14 @@ sigv4_scope_write :: proc(builder: ^strings.Builder, stamp, region, service: str
 }
 
 // The bytes the credential scope takes; see sigv4_scope_write.
+@(private)
 sigv4_scope_size :: proc(region, service: string) -> int {
 	return 8 + 1 + len(region) + 1 + len(service) + len("/aws4_request")
 }
 
 // Writes "Authorization: AWS4-HMAC-SHA256 Credential=<access key>/<scope>,
 // SignedHeaders=<signed>, Signature=<signature>" into builder.
+@(private)
 sigv4_authorization_write :: proc(
 	builder: ^strings.Builder,
 	access_key, stamp, region, service, signed: string,
@@ -95,6 +102,7 @@ sigv4_authorization_write :: proc(
 }
 
 // The bytes sigv4_authorization_write takes.
+@(private)
 sigv4_authorization_size :: proc(access_key, region, service, signed: string) -> int {
 	size := len("Authorization: AWS4-HMAC-SHA256 Credential=") + len(access_key) + 1
 	size += sigv4_scope_size(region, service) + len(", SignedHeaders=") + len(signed)
@@ -102,6 +110,7 @@ sigv4_authorization_size :: proc(access_key, region, service, signed: string) ->
 }
 
 // Writes the lower-case hex of bytes into out, which holds twice as many bytes.
+@(private)
 sigv4_hex :: proc(bytes: []u8, out: []u8) {
 	digits := "0123456789abcdef"
 	for b, i in bytes {
@@ -122,6 +131,7 @@ sigv4_update :: proc(hasher: ^hash.Context, parts: ..string) {
 // of canonical_digest, into tag. scope is given in pieces that are signed in
 // order. The secret and every derived key stay on the stack and are erased before
 // returning, so no copy outlives the caller's credentials.
+@(private)
 sigv4_signature_from_digest :: proc(
 	secret, region, service, stamp: string,
 	scope: []string,

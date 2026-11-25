@@ -39,6 +39,7 @@ AWS_Credentials :: struct {
 // sending are not observed. It runs on the requesting thread and must not block.
 S3_Observer :: #type proc(started: time.Tick, ok: bool)
 
+@(private)
 s3_observer: S3_Observer
 
 // Installs the S3 observer; nil removes it. Install it before requests start.
@@ -122,6 +123,7 @@ s3_config_error :: proc(config: S3_Config) -> string {
 // A host and an optional port, nothing else: no path, query, user or space. The
 // host is lower case and the port is not the default, so that the Host a client
 // sends cannot differ from the one that was signed.
+@(private)
 s3_endpoint_authority_valid :: proc(authority: string) -> bool {
 	host, port := authority, ""
 	if strings.has_prefix(authority, "[") {
@@ -171,6 +173,7 @@ s3_endpoint_authority_valid :: proc(authority: string) -> bool {
 	return number <= 65535 && number != 443
 }
 
+@(private)
 signing_time :: proc(now: time.Time) -> time.Time {
 	if now == (time.Time{}) {
 		return time.now()
@@ -179,6 +182,7 @@ signing_time :: proc(now: time.Time) -> time.Time {
 	return now
 }
 
+@(private)
 region_char_valid :: proc(ch: rune) -> bool {
 	return is_lower(ch) || is_digit(ch) || ch == '-'
 }
@@ -189,9 +193,12 @@ region_char_valid :: proc(ch: rune) -> bool {
 
 // The timeout of a PUT or DELETE: 15 s plus 1 s per whole MiB of body, at most
 // Surf's 120 s. A file upload gets 120 s.
+@(private)
 S3_REQUEST_TIMEOUT_MS :: 15000
+@(private)
 S3_REQUEST_TIMEOUT_MAX_MS :: 120000
 
+@(private)
 s3_request_timeout :: proc(body_size: i64, file: bool) -> i64 {
 	if file {
 		return S3_REQUEST_TIMEOUT_MAX_MS
@@ -300,6 +307,7 @@ s3_delete :: proc(
 	)
 }
 
+@(private)
 s3_object_request_at :: proc(
 	config: S3_Config,
 	credentials: AWS_Credentials,
@@ -356,6 +364,7 @@ s3_object_request_at :: proc(
 
 // Validates and signs one object request without sending it. digest is the hex
 // SHA-256 of a payload that is not in body; empty means body is hashed here.
+@(private)
 s3_object_sign :: proc(
 	config: S3_Config,
 	credentials: AWS_Credentials,
@@ -410,6 +419,7 @@ s3_object_sign :: proc(
 }
 
 // The checks every signed S3 request makes before anything is built.
+@(private)
 s3_input_valid :: proc(config: S3_Config, credentials: AWS_Credentials, key: string) -> bool {
 	return aws_credentials_valid(credentials) && s3_config_error(config) == "" && config.bucket != "" && key != ""
 }
@@ -511,6 +521,7 @@ s3_key_strict :: proc(key: string) -> bool {
 	return key[len(key) - 1] != '/'
 }
 
+@(private)
 s3_request :: proc(
 	config: S3_Config,
 	credentials: AWS_Credentials,
@@ -541,6 +552,7 @@ s3_request :: proc(
 
 // Splits "Name: value" lines into fields. A line with an empty value is dropped:
 // "Expect:" only switches off a default of the buffered client.
+@(private)
 s3_header_fields :: proc(lines: []string, fields: []S3_Header) -> (count: int, ok: bool) {
 	for line in lines {
 		colon := strings.index_byte(line, ':')
@@ -568,6 +580,7 @@ s3_header_fields :: proc(lines: []string, fields: []S3_Header) -> (count: int, o
 // x-amz-security-token and Authorization. Content-Type is sent but not signed.
 // The line text is written into builder after the request is signed, so host and
 // path may point into builder; the lines are cut from it once it is complete.
+@(private)
 s3_object_headers :: proc(
 	builder: ^strings.Builder,
 	config: S3_Config,
@@ -642,6 +655,7 @@ s3_object_headers :: proc(
 }
 
 // The bytes s3_object_headers writes into its builder, at most.
+@(private)
 s3_object_headers_size :: proc(
 	config: S3_Config,
 	credentials: AWS_Credentials,
@@ -730,6 +744,7 @@ s3_download_url :: proc(
 
 // Writes the origin and then the encoded path of key into builder, which together
 // are the request URL. host_start and path_start are offsets into builder.
+@(private)
 s3_location_write :: proc(
 	builder: ^strings.Builder,
 	config: S3_Config,
@@ -765,6 +780,7 @@ s3_location_write :: proc(
 }
 
 // The bytes s3_location_write writes, at most.
+@(private)
 s3_location_size :: proc(config: S3_Config, key: string) -> int {
 	origin := len(config.endpoint) + len("https://") + len(config.bucket) + len(".s3.") + len(config.region) + len(".amazonaws.com.cn")
 	return origin + 2 + len(config.bucket) + 3 * len(key)
@@ -778,6 +794,7 @@ s3_encode :: proc(text: string, keep_slashes := false) -> string {
 
 // Writes text into builder percent-encoded as SigV4 requires: unreserved bytes as
 // they are, a slash too when keep_slashes is set, and every other byte as %XX.
+@(private)
 s3_encode_write :: proc(builder: ^strings.Builder, text: string, keep_slashes := false) {
 	for ch in transmute([]byte)text {
 		if is_alphanumeric(ch) ||
@@ -796,6 +813,7 @@ s3_encode_write :: proc(builder: ^strings.Builder, text: string, keep_slashes :=
 	}
 }
 
+@(private)
 s3_sha256 :: proc(data: []byte) -> string {
 	digest: [32]byte
 	hash.hash(.SHA256, data, digest[:])
@@ -807,6 +825,7 @@ s3_sha256 :: proc(data: []byte) -> string {
 // and the keys derived from it stay on the stack and are erased before returning,
 // so no copy outlives the caller's credentials. The signers stream their canonical
 // requests through sigv4_sign instead; this form remains for fixtures.
+@(private)
 s3_signature :: proc(
 	secret, region, stamp, scope, canonical: string,
 	service: string = "s3",
@@ -818,15 +837,18 @@ s3_signature :: proc(
 	return string(hex.encode(signature[:], allocator = context.temp_allocator))
 }
 
+@(private)
 s3_timestamp :: proc(now: time.Time) -> string {
 	buffer: [S3_TIMESTAMP_BYTES_MAX]u8
 	return strings.clone(s3_timestamp_write(buffer[:], now), context.temp_allocator)
 }
 
 // A stamp is 16 bytes for years 1000 to 9999; the bound leaves room for others.
+@(private)
 S3_TIMESTAMP_BYTES_MAX :: 32
 
 // Formats now as YYYYMMDDTHHMMSSZ into buffer and returns that part of it.
+@(private)
 s3_timestamp_write :: proc(buffer: []u8, now: time.Time) -> string {
 	year, month, day := time.date(now)
 	hour, minute, second := time.clock(now)
@@ -838,6 +860,7 @@ S3_GET_BYTES_MAX :: 64 * 1024 * 1024 // Surf's response body ceiling
 S3_GET_TIMEOUT_MS :: 120000
 S3_GET_HEADERS_MAX :: 8
 
+@(private)
 s3_get_native_config :: proc(
 	timeout_ms: i64,
 	bytes_max: int,

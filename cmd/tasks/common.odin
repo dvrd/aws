@@ -220,11 +220,14 @@ alive :: proc(child: Child) -> bool {
 	return posix.kill(child.pid, .NONE) == .OK
 }
 
-// Ends the child's session and reaps it.
+// Ends the child and the session it started, and reaps it. The child is signalled
+// first because it may not have called setsid yet.
 stop :: proc(child: Child) {
 	status: c.int
+	posix.kill(child.pid, .SIGTERM)
 	posix.killpg(child.pid, .SIGTERM)
 	time.sleep(50 * time.Millisecond)
+	posix.kill(child.pid, .SIGKILL)
 	posix.killpg(child.pid, .SIGKILL)
 	posix.waitpid(child.pid, &status, {})
 }

@@ -728,12 +728,14 @@ S3_Get_Error :: enum u8 {
 	None,
 	Invalid_Input, // bad config/credentials/key/bound; nothing was sent
 	Not_Found, // 404: no object under the key
-	Too_Large, // the object is above bytes_max; no bytes are returned
+	Too_Large, // a 2xx object is above bytes_max; no bytes are returned
 	Rejected, // nonretryable status, including redirects and other 4xx
 	Unavailable, // transport failure, timeout, 408/429/5xx: retry later
 }
 
-// Per-operation executor for s3_get. It sends one signed GET ("Name: value" header
+// Per-operation executor for s3_get. On an error status whose body exceeds
+// bytes_max, return the status with Too_Large; s3_get classifies the status.
+// It sends one signed GET ("Name: value" header
 // lines), never follows redirects, and returns at most bytes_max body bytes in
 // allocator (Too_Large otherwise). status is the HTTP status, 0 when none arrived.
 S3_Get_Execute :: proc(
@@ -784,17 +786,23 @@ s3_get :: proc(
 	url := fmt.tprintf("%s%s", origin, path)
 	started := time.tick_now()
 	body, status, error := execute(url, headers, S3_GET_TIMEOUT_MS, bytes_max, allocator)
-	s3_observe(started, error == .None && (status == 404 || (status >= 200 && status <= 299)))
-	if error == .None && (status < 200 || status > 299) {
+	answered := status >= 200 && status <= 299
+	// A status that is not 2xx decides the outcome, even when its body was cut
+	// short for exceeding bytes_max: error answers are small XML documents that
+	// a tight bound can still exceed.
+	if status != 0 && !answered && (error == .None || error == .Too_Large) {
 		switch {
 		case status == 404:
 			error = .Not_Found
-		case status == 0 || status == 408 || status == 429 || status >= 500:
+		case status == 408 || status == 429 || status >= 500:
 			error = .Unavailable
 		case:
 			error = .Rejected
 		}
+	} else if error == .None && status == 0 {
+		error = .Unavailable
 	}
+	s3_observe(started, error == .None || error == .Not_Found)
 	if error == .None && len(body) > bytes_max {
 		error = .Too_Large
 	}

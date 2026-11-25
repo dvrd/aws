@@ -712,6 +712,30 @@ s3_get_maps_status_and_releases_every_failed_body :: proc(t: ^testing.T) {
 		testing.expect(t, body == nil)
 	}
 
+	// The native executor stops reading an error body above bytes_max and reports
+	// Too_Large with the status; the status decides.
+	fixture.error = .Too_Large
+	fixture.body_size = 0
+	for item in cases {
+		if item.status == 0 {
+			continue
+		}
+		fixture.status = item.status
+		body, e := s3_get(
+			config,
+			credentials,
+			"a b/c+d",
+			8,
+			time.unix(1369353600, 0),
+			context.allocator,
+			s3_get_fixture_execute,
+		)
+		testing.expect_value(t, e, item.error)
+		testing.expect(t, body == nil)
+	}
+	fixture.error = .None
+	fixture.body_size = 7
+
 	fixture.status = 200
 	fixture.body_size = 9
 	body, e := s3_get(
@@ -874,6 +898,25 @@ s3_observer_counts_a_missing_object_as_an_answer :: proc(t: ^testing.T) {
 	_, e := s3_get(config, credentials, "", 8, allocator = context.allocator, execute = s3_get_fixture_execute)
 	testing.expect_value(t, e, S3_Get_Error.Invalid_Input)
 	testing.expect_value(t, s3_observer_record.calls, len(cases))
+
+	// A 404 whose body exceeded bytes_max is still an answer, not a failure.
+	failures := s3_observer_record.failures
+	fixture.error = .Too_Large
+	fixture.status = 404
+	body, e2 := s3_get(
+		config,
+		credentials,
+		"a b/c+d",
+		8,
+		time.unix(1369353600, 0),
+		context.allocator,
+		s3_get_fixture_execute,
+	)
+	fixture.error = .None
+	testing.expect(t, body == nil)
+	testing.expect_value(t, e2, S3_Get_Error.Not_Found)
+	testing.expect_value(t, s3_observer_record.calls, len(cases) + 1)
+	testing.expect_value(t, s3_observer_record.failures, failures)
 }
 
 @(test)

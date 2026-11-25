@@ -232,7 +232,10 @@ credential_probe_allocate :: proc(
 		}
 	}
 	if mode == .Free && old_memory != nil && old_size > 0 {
-		probe.frees += 1
+		// The refresh's scratch buffer is freed with the cache's allocator after every refresh; the counter tracks snapshot frees.
+		if old_size != CREDENTIAL_SCRATCH_BYTES {
+			probe.frees += 1
+		}
 		bytes := ([^]byte)(old_memory)[:old_size]
 
 		if credential_probe_contains(bytes, "old-secret") || credential_probe_contains(bytes, "new-secret") {
@@ -874,6 +877,124 @@ credential_refresh_replaces_ahead_of_expiry_and_cached_leases_never_fetch :: pro
 	testing.expect_value(t, expired.source, Credential_Source.ECS)
 	testing.expect_value(t, http.calls, 3)
 	testing.expect_value(t, credential_refresh(&cache, -time.Second).kind, Credential_Error_Kind.Invalid_Argument)
+}
+
+@(test)
+credential_refresh_leaves_the_callers_temp_allocator_alone :: proc(t: ^testing.T) {
+	// Allocated first so it is freed last, after the cache is destroyed.
+	backing := make([]u8, 1 << 20)
+	defer delete(backing)
+	saved := credential_test_env_push()
+	defer credential_test_env_pop(saved)
+	directory, directory_error := os.make_directory_temp("", "aws-cache-*", context.allocator)
+	testing.expect(t, directory_error == nil)
+	defer delete(directory)
+	defer os.remove(directory)
+	credential_test_absent(directory)
+	testing.expect(t, os.set_env("AWS_CONTAINER_CREDENTIALS_RELATIVE_URI", "/v2/credentials/fixture") == nil)
+	expires := credential_test_instant("2024-01-01T00:00:00Z")
+	clock := Credential_Test_Clock {
+		now = time.time_add(expires, -time.Hour),
+	}
+	http := Credential_Test_HTTP {
+		body      = CREDENTIAL_TEST_OLD,
+		next_body = CREDENTIAL_TEST_NEW,
+	}
+	credential_test_http_state = &http
+	defer credential_test_http_state = nil
+	cache: Credential_Cache
+	testing.expect_value(t, credential_test_cache(&cache, &clock).kind, .None)
+	defer credential_cache_destroy(&cache)
+
+	watched: mem.Arena
+	mem.arena_init(&watched, backing)
+	context.temp_allocator = mem.arena_allocator(&watched)
+
+	testing.expect_value(t, credential_refresh(&cache).kind, Credential_Error_Kind.None)
+	clock.now = time.time_add(expires, -time.Minute)
+	testing.expect_value(t, credential_refresh(&cache).kind, Credential_Error_Kind.None)
+	testing.expect_value(t, http.calls, 2)
+	testing.expect_value(t, watched.offset, 0)
+	testing.expect(t, !credential_probe_contains(backing, "old-secret"))
+	testing.expect(t, !credential_probe_contains(backing, "new-secret"))
+
+	lease, lease_error := credential_lease_cached(&cache)
+	defer credential_lease_release(&cache, &lease)
+	testing.expect(t, lease_error.kind == .None && lease.secret_key == "new-secret")
+}
+
+// Replies of credential_scratch_holds_the_largest_resolution, which holds the
+// environment lock while they are set.
+credential_test_scratch_role: string
+credential_test_scratch_document: string
+
+@(test)
+credential_scratch_holds_the_largest_resolution :: proc(t: ^testing.T) {
+	// Copies every reply into context.temp_allocator, as Surf's buffered client does.
+	copying :: proc(request: HTTP_Request) -> ([]u8, network_client.Buffered_HTTP_Result) {
+		reply := ""
+		switch {
+		case request.method == "PUT" && request.url == "http://169.254.169.254/latest/api/token":
+			reply = "imds-token"
+		case request.method == "GET" && request.url == "http://169.254.169.254/latest/meta-data/iam/security-credentials/":
+			reply = credential_test_scratch_role
+		case request.method == "GET" &&
+		     request.url == "http://169.254.169.254/latest/meta-data/iam/security-credentials/fixture-role":
+			reply = credential_test_scratch_document
+		case:
+			return nil, {ok = false, status = 404}
+		}
+		copied, copy_error := strings.clone(reply, context.temp_allocator)
+		if copy_error != nil {
+			return nil, {ok = false}
+		}
+		return transmute([]u8)copied, {ok = true, status = 200}
+	}
+
+	saved := credential_test_env_push()
+	defer credential_test_env_pop(saved)
+	directory, directory_error := os.make_directory_temp("", "aws-scratch-*", context.allocator)
+	testing.expect(t, directory_error == nil)
+	defer delete(directory)
+	defer os.remove(directory)
+	credential_test_absent(directory)
+	testing.expect(t, os.unset_env("AWS_EC2_METADATA_DISABLED"))
+
+	padding := strings.repeat(" ", 60 * 1024, context.allocator)
+	defer delete(padding)
+	role := strings.concatenate({"fixture-role", padding, "\n"}, context.allocator)
+	defer delete(role)
+	document := strings.concatenate({CREDENTIAL_TEST_FAR, padding}, context.allocator)
+	defer delete(document)
+	credential_test_scratch_role = role
+	credential_test_scratch_document = document
+	defer credential_test_scratch_role = ""
+	defer credential_test_scratch_document = ""
+
+	// A profile file close to its 64 KiB bound with no [default] section.
+	builder := strings.builder_make(context.allocator)
+	defer strings.builder_destroy(&builder)
+	strings.write_string(&builder, "[other]\naws_access_key_id = other-key\naws_secret_access_key = other-secret\n")
+	for strings.builder_len(builder) < 60 * 1024 {
+		strings.write_string(&builder, "# padding padding padding padding padding padding padding padding\n")
+	}
+	path := fmt.aprintf("%s/credentials", directory)
+	defer delete(path)
+	defer os.remove(path)
+	testing.expect(t, os.write_entire_file(path, strings.to_string(builder)) == nil)
+	testing.expect(t, os.set_env("AWS_SHARED_CREDENTIALS_FILE", path) == nil)
+
+	clock := Credential_Test_Clock {
+		now = credential_test_instant("2024-01-01T00:00:00Z"),
+	}
+	cache: Credential_Cache
+	testing.expect_value(t, credential_cache_init(&cache, copying, credential_test_clock, &clock).kind, Credential_Error_Kind.None)
+	defer credential_cache_destroy(&cache)
+
+	testing.expect_value(t, credential_refresh(&cache).kind, Credential_Error_Kind.None)
+	lease, lease_error := credential_lease_cached(&cache)
+	defer credential_lease_release(&cache, &lease)
+	testing.expect(t, lease_error.kind == .None && lease.source == .EC2 && lease.secret_key == "far-secret")
 }
 
 @(test)

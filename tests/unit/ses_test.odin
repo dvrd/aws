@@ -44,7 +44,12 @@ ses_operation_uses_injected_http_and_preserves_outcomes :: proc(t: ^testing.T) {
 	state.status = 0
 	state.ok = false
 	testing.expect_value(t, ses_send(config, credentials, "subject", "body", time.Time{}, aws_test_http), .Unavailable)
-	testing.expect_value(t, state.calls, 4)
+	// SES answered 200 but the body was lost: the message was accepted, so this
+	// must never be reported as Unavailable (which invites a resend).
+	state.status = 200
+	state.ok = false
+	testing.expect_value(t, ses_send(config, credentials, "subject", "body", time.Time{}, aws_test_http), .Invalid_Response)
+	testing.expect_value(t, state.calls, 5)
 }
 
 @(test)

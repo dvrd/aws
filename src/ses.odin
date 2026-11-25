@@ -63,7 +63,8 @@ ses_config_valid :: proc(config: SES_Config) -> bool {
 // Blocks the calling thread for up to 15 seconds. now is the signing time; the
 // zero time means time.now(). Rejected is any answer from SES other than 200,
 // throttles and 5xx included: SES acknowledged the request and it is not replayed
-// here. Unavailable means no answer arrived.
+// here. A 200 whose body is lost or unreadable is Invalid_Response, for the same
+// reason. Unavailable means no answer arrived, so only Unavailable is safe to retry.
 ses_send :: proc(
 	config: SES_Config,
 	credentials: AWS_Credentials,
@@ -96,11 +97,15 @@ ses_send :: proc(
 	data, result := http_execute(
 		{method = "POST", url = fmt.tprintf("https://%s%s", host, path), body = payload, headers = headers, timeout_ms = 15000},
 	)
-	if result.status != 0 && result.status != 200 {
+	// A status means SES answered: only its absence makes a retry safe.
+	if result.status == 0 {
+		return .Unavailable
+	}
+	if result.status != 200 {
 		return .Rejected
 	}
 	if !result.ok {
-		return .Unavailable
+		return .Invalid_Response
 	}
 	response: struct {
 		MessageId: string,

@@ -14,6 +14,13 @@ tasks:
     cmds:
       - build/tasks check
 
+  check:fast:
+    desc: Type-check and run the unit tests only (the layout rule included)
+    deps: [tasks]
+    cmds:
+      - build/tasks build
+      - build/tasks test --package unit
+
   deps:
     desc: Compare the shared collection with the pins in .krs/packages.json
     deps: [tasks]

@@ -28,8 +28,9 @@ import "shared:surf"
 //   aws_credentials           scripts only
 
 // Uncached resolution for scripts; servers use a Credential_Cache (see above).
-// Strings borrow context.temp_allocator and are not wiped. No expiry and no cache:
-// a later call observes environment changes. Incomplete configured material fails closed.
+// Strings borrow context.temp_allocator and are not wiped. No cache: a later call
+// observes environment changes. It applies the cache's rules (sources, bounds,
+// expiry against the wall clock, unsupported mechanisms refused) through the same resolver.
 // Blocks for up to three metadata calls of 1500 ms each.
 aws_credentials :: proc() -> (credentials: AWS_Credentials, ok: bool) {
 	return aws_credentials_with_http(http_execute_default)
@@ -44,119 +45,25 @@ aws_credentials_with_http :: proc(
 	if http_execute == nil {
 		return
 	}
-
-	credentials = {
-		access_key    = os.get_env("AWS_ACCESS_KEY_ID", context.temp_allocator),
-		secret_key    = os.get_env("AWS_SECRET_ACCESS_KEY", context.temp_allocator),
-		session_token = os.get_env("AWS_SESSION_TOKEN", context.temp_allocator),
-	}
-
-	if credentials.access_key != "" ||
-	   credentials.secret_key != "" ||
-	   credentials.session_token != "" {
-		return credentials, aws_credentials_valid(credentials)
-	}
-
-	profile := os.get_env("AWS_PROFILE", context.temp_allocator)
-	if profile == "" {
-		profile = "default"
-	}
-	path := os.get_env("AWS_SHARED_CREDENTIALS_FILE", context.temp_allocator)
-
-	if path == "" {
-		path = fmt.tprintf("%s/.aws/credentials", os.get_env("HOME", context.temp_allocator))
-	}
-
-	file_credentials, _, _, file_error := credential_profile_load(path, profile, false)
-
-	if file_error.kind != .None && file_error.kind != .Open_Failed {
-		return
-	}
-
-	if file_credentials.access_key != "" ||
-	   file_credentials.secret_key != "" ||
-	   file_credentials.session_token != "" {
-		return file_credentials, aws_credentials_valid(file_credentials)
-	}
-
-	relative := os.get_env("AWS_CONTAINER_CREDENTIALS_RELATIVE_URI", context.temp_allocator)
-	url, token := "", ""
-
-	if relative != "" {
-		// The same rule the cache applies: one path on the fixed link-local host.
-		if !credential_relative_uri_ok(relative) {
-			return
-		}
-		url = fmt.tprintf("http://169.254.170.2%s", relative)
-	} else {
-		if os.get_env("AWS_EC2_METADATA_DISABLED", context.temp_allocator) == "true" {
-			return
-		}
-		reply, result := http_execute(
-			{
-				method = "PUT",
-				url = "http://169.254.169.254/latest/api/token",
-				headers = {"X-aws-ec2-metadata-token-ttl-seconds: 60"},
-				allow_http = true,
-				timeout_ms = 1500,
-			},
-		)
-		if !result.ok {
-			return
-		}
-		token = string(reply)
-		if token == "" ||
-		   len(token) > CREDENTIAL_IMDS_TOKEN_MAX ||
-		   !credential_text_printable(token) {
-			return
-		}
-		role, role_result := http_execute(
-			{
-				method = "GET",
-				url = "http://169.254.169.254/latest/meta-data/iam/security-credentials/",
-				headers = {fmt.tprintf("X-aws-ec2-metadata-token: %s", token)},
-				allow_http = true,
-				timeout_ms = 1500,
-			},
-		)
-		role_name := strings.trim_space(string(role))
-
-		if !role_result.ok ||
-		   role_name == "" ||
-		   len(role_name) > CREDENTIAL_ROLE_MAX ||
-		   strings.contains_any(role_name, "/?#\\@") ||
-		   !credential_text_printable(role_name) {
-			return
-		}
-
-		url = fmt.tprintf(
-			"http://169.254.169.254/latest/meta-data/iam/security-credentials/%s",
-			role_name,
-		)
-	}
-
-	headers: []string
-	if token != "" {
-		headers = {fmt.tprintf("X-aws-ec2-metadata-token: %s", token)}
-	}
-	data, result := http_execute(
-		{method = "GET", url = url, headers = headers, allow_http = true, timeout_ms = 1500},
+	snap, failure := credential_resolve(
+		{
+			execute = http_execute,
+			clock = credential_clock_now,
+			modes = CREDENTIAL_MODES_SUPPORTED,
+			allocator = context.allocator,
+		},
 	)
-	if !result.ok {
+	if failure.kind != .None || snap == nil {
 		return
 	}
-	document: struct {
-		access: string `json:"AccessKeyId"`,
-		secret: string `json:"SecretAccessKey"`,
-		token:  string `json:"Token"`,
+	// The caller gets copies in the temp allocator; the snapshot is wiped now.
+	defer credential_snapshot_erase(nil, snap)
+	credentials = {
+		access_key    = strings.clone(snap.access_key, context.temp_allocator),
+		secret_key    = strings.clone(snap.secret_key, context.temp_allocator),
+		session_token = strings.clone(snap.session_token, context.temp_allocator),
 	}
-
-	if json.unmarshal(data, &document, allocator = context.temp_allocator) != nil {
-		return
-	}
-	credentials = {document.access, document.secret, document.token}
-
-	return credentials, aws_credentials_valid(credentials)
+	return credentials, true
 }
 
 aws_credentials_valid :: proc(value: AWS_Credentials) -> bool {

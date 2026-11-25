@@ -49,6 +49,8 @@ CREDENTIAL_TEST_OLD :: `{"Code":"Success","AccessKeyId":"old-key","SecretAccessK
 
 CREDENTIAL_TEST_NEW :: `{"Code":"Success","AccessKeyId":"new-key","SecretAccessKey":"new-secret","Token":"new-token","Expiration":"2024-06-01T00:00:00Z"}`
 
+CREDENTIAL_TEST_FAR :: `{"Code":"Success","AccessKeyId":"far-key","SecretAccessKey":"far-secret","Token":"far-token","Expiration":"2099-01-01T00:00:00Z"}`
+
 Credential_Test_Clock :: struct {
 	now: time.Time,
 }
@@ -1023,9 +1025,91 @@ uncached_resolution_applies_the_metadata_path_rule :: proc(t: ^testing.T) {
 	}
 	testing.expect_value(t, http.calls, 0)
 	testing.expect(t, os.set_env("AWS_CONTAINER_CREDENTIALS_RELATIVE_URI", "/v2/credentials/fixture") == nil)
+	http.body = CREDENTIAL_TEST_FAR
 	credentials, ok := aws_credentials_with_http(credential_test_http)
-	testing.expect(t, ok && credentials.secret_key == "new-secret")
+	testing.expect(t, ok && credentials.secret_key == "far-secret")
 	testing.expect_value(t, http.calls, 1)
+}
+
+@(test)
+uncached_resolution_applies_the_cache_rules :: proc(t: ^testing.T) {
+	saved := credential_test_env_push()
+	defer credential_test_env_pop(saved)
+	directory, directory_error := os.make_directory_temp("", "aws-cache-*", context.allocator)
+	testing.expect(t, directory_error == nil)
+	defer delete(directory)
+	defer os.remove(directory)
+	credential_test_absent(directory)
+	http: Credential_Test_HTTP
+	credential_test_http_state = &http
+	defer credential_test_http_state = nil
+	testing.expect(t, os.set_env("AWS_CONTAINER_CREDENTIALS_RELATIVE_URI", "/v2/credentials/fixture") == nil)
+
+	// Documents that are not a successful answer, or carry no future expiry.
+	for body in ([]string {
+			`{"Code":"Failure","AccessKeyId":"far-key","SecretAccessKey":"far-secret","Token":"far-token","Expiration":"2099-01-01T00:00:00Z"}`,
+			`{"Code":"Success","AccessKeyId":"far-key","SecretAccessKey":"far-secret","Token":"far-token"}`,
+			`{"Code":"Success","AccessKeyId":"far-key","SecretAccessKey":"far-secret","Token":"far-token","Expiration":"2020-01-01T00:00:00Z"}`,
+		}) {
+		http = {
+			body = body,
+		}
+		_, ok := aws_credentials_with_http(credential_test_http)
+		testing.expect(t, !ok, body)
+		testing.expect_value(t, http.calls, 1)
+	}
+
+	// Unsupported mechanisms are refused, not skipped in favour of the metadata service.
+	http = {
+		body = CREDENTIAL_TEST_FAR,
+	}
+	testing.expect(t, os.set_env("AWS_WEB_IDENTITY_TOKEN_FILE", "/nonexistent/token") == nil)
+	_, web_identity_ok := aws_credentials_with_http(credential_test_http)
+	testing.expect(t, !web_identity_ok)
+	testing.expect_value(t, http.calls, 0)
+	testing.expect(t, os.unset_env("AWS_WEB_IDENTITY_TOKEN_FILE"))
+
+	testing.expect(t, os.set_env("AWS_CONTAINER_CREDENTIALS_FULL_URI", "http://169.254.170.2/v2/credentials/fixture") == nil)
+	_, full_uri_ok := aws_credentials_with_http(credential_test_http)
+	testing.expect(t, !full_uri_ok)
+	testing.expect_value(t, http.calls, 0)
+	testing.expect(t, os.unset_env("AWS_CONTAINER_CREDENTIALS_FULL_URI"))
+
+	path := fmt.aprintf("%s/credentials", directory)
+	defer delete(path)
+	defer os.remove(path)
+	profile := "[default]\naws_access_key_id = role-key\naws_secret_access_key = role-secret\nrole_arn = arn:aws:iam::000000000000:role/example\n"
+	testing.expect(t, os.write_entire_file(path, profile) == nil)
+	testing.expect(t, os.set_env("AWS_SHARED_CREDENTIALS_FILE", path) == nil)
+	_, role_ok := aws_credentials_with_http(credential_test_http)
+	testing.expect(t, !role_ok)
+	testing.expect_value(t, http.calls, 0)
+	testing.expect(t, os.set_env("AWS_SHARED_CREDENTIALS_FILE", fmt.tprintf("%s/absent", directory)) == nil)
+
+	// Environment credentials obey their exported expiry and the length bounds.
+	testing.expect(t, os.set_env("AWS_ACCESS_KEY_ID", "env-key") == nil)
+	testing.expect(t, os.set_env("AWS_SECRET_ACCESS_KEY", "env-secret") == nil)
+	testing.expect(t, os.set_env("AWS_CREDENTIAL_EXPIRATION", "2020-01-01T00:00:00Z") == nil)
+	_, expired_ok := aws_credentials_with_http(credential_test_http)
+	testing.expect(t, !expired_ok)
+	testing.expect(t, os.unset_env("AWS_CREDENTIAL_EXPIRATION"))
+
+	long_secret := strings.repeat("s", CREDENTIAL_SECRET_MAX + 1)
+	defer delete(long_secret)
+	testing.expect(t, os.set_env("AWS_SECRET_ACCESS_KEY", long_secret) == nil)
+	_, long_ok := aws_credentials_with_http(credential_test_http)
+	testing.expect(t, !long_ok)
+	testing.expect_value(t, http.calls, 0)
+	testing.expect(t, os.unset_env("AWS_ACCESS_KEY_ID"))
+	testing.expect(t, os.unset_env("AWS_SECRET_ACCESS_KEY"))
+
+	// The caller's copies outlive the snapshot the call erased.
+	credentials, ok := aws_credentials_with_http(credential_test_http)
+	testing.expect(t, ok)
+	testing.expect_value(t, http.calls, 1)
+	testing.expect_value(t, credentials.access_key, "far-key")
+	testing.expect_value(t, credentials.secret_key, "far-secret")
+	testing.expect_value(t, credentials.session_token, "far-token")
 }
 
 @(test)

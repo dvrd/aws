@@ -6,6 +6,7 @@ import "core:bytes"
 import "core:crypto/hash"
 import "core:encoding/hex"
 import "core:fmt"
+import "core:io"
 import "core:mem"
 import "core:os"
 import "core:strings"
@@ -34,53 +35,6 @@ sigv4_matches_independent_fixture :: proc(t: ^testing.T) {
 		canonical,
 	)
 	testing.expect_value(t, actual, "f0e8bdb87c964420e857bd35b5d6ed310bd44f0170aba48dd91039c6036bdb41")
-}
-
-AWS_Test_HTTP :: struct {
-	t:                 ^testing.T,
-	calls:             int,
-	method, url, body: string,
-	file_body:         bool,
-	status:            int,
-	response:          string,
-	ok:                bool,
-}
-
-// Serialize only the shared fake provider; unrelated tests can run in parallel.
-aws_test_http_mutex: sync.Mutex
-
-aws_test_http_state: ^AWS_Test_HTTP
-
-aws_test_http :: proc(request: HTTP_Request) -> ([]u8, network_client.Buffered_HTTP_Result) {
-	state := aws_test_http_state
-	state.calls += 1
-	testing.expect_value(state.t, request.method, state.method)
-	testing.expect_value(state.t, request.url, state.url)
-	testing.expect(state.t, !request.allow_http && request.ca_file == "", "fake peer receives HTTPS policy")
-	if state.file_body {
-		testing.expect(state.t, request.upload_file != nil && request.upload_size == 7 && request.timeout_ms == 120000)
-		buffer: [7]u8
-		n, error := os.read(request.upload_file, buffer[:])
-		testing.expect(state.t, error == nil && n == 7 && string(buffer[:]) == "payload")
-	} else {
-		testing.expect(state.t, request.upload_file == nil && request.upload_size == 0 && request.timeout_ms == 15000)
-
-		if state.body != "" {
-			testing.expect_value(state.t, string(request.body), state.body)
-		}
-	}
-	auth, date := false, false
-	for header in request.headers {
-		if strings.has_prefix(header, "Authorization: AWS4-HMAC-SHA256 Credential=fixture-key/") {
-			auth = true
-		}
-
-		if strings.has_prefix(header, "x-amz-date: ") {
-			date = true
-		}
-	}
-	testing.expect(state.t, auth && date, "signed headers reach the injected provider")
-	return transmute([]u8)state.response, {status = state.status, ok = state.ok}
 }
 
 @(test)
@@ -1281,7 +1235,9 @@ put_and_delete_report_typed_outcomes :: proc(t: ^testing.T) {
 		{{status = 429, transport_ok = true}, {429, false, .Unavailable, .Response_Received}},
 		{{status = 200, ok = false}, {200, false, .Unavailable, .Response_Received}},
 		{{status = 0, error = {kind = .IO_Failed, write_effect = .Unknown}}, {0, false, .Unavailable, .Unknown}},
-		{{status = 0, error = {kind = .Invalid_Config, write_effect = .Not_Sent}}, {0, false, .Unavailable, .Not_Sent}},
+		{{status = 0, error = {kind = .Invalid_Config, write_effect = .Not_Sent}}, {0, false, .Invalid_Input, .Not_Sent}},
+		{{status = 0, error = {kind = .TLS_Failed, tls_error = tls.Protocol_Error.Unknown_Ca, write_effect = .Not_Sent}}, {0, false, .Rejected, .Not_Sent}},
+		{{status = 0}, {0, false, .Unavailable, .Unknown}},
 	}
 	for c in cases {
 		fixture.result = c.answer
@@ -1349,6 +1305,88 @@ status_classifier_matches_the_documented_rule :: proc(t: ^testing.T) {
 	}
 	for c in cases {
 		testing.expect_value(t, s3_status_error(c.status), c.want)
+	}
+}
+
+// A response laid out the way Surf builds one: body_storage allocated with
+// context.allocator and holding payload, body a view of its first body_length bytes.
+s3_test_response :: proc(payload: string, body_length: int) -> network_client.Response {
+	storage := make([dynamic]u8, 0, 4096, context.allocator)
+	append(&storage, payload)
+	return {status = 200, allocator = context.allocator, body_storage = storage, body = storage[:body_length]}
+}
+
+@(test)
+s3_get_body_hand_over_frees_exactly_once :: proc(t: ^testing.T) {
+	{
+		// A whole body is taken: the caller owns Surf's storage.
+		response := s3_test_response("object bytes", len("object bytes"))
+		storage := raw_data(response.body_storage)
+		body, ok := s3_get_body_take(&response, context.allocator)
+		testing.expect(t, ok)
+		testing.expect_value(t, string(body), "object bytes")
+		testing.expect(t, raw_data(body) == storage)
+		testing.expect(t, response.body == nil)
+		network_client.response_destroy(&response)
+		delete(body, context.allocator)
+	}
+	{
+		// A view that is not the whole buffer cannot be taken, so it is copied.
+		response := s3_test_response("object bytes and more", len("object bytes"))
+		storage := raw_data(response.body_storage)
+		body, ok := s3_get_body_take(&response, context.allocator)
+		testing.expect(t, ok)
+		testing.expect_value(t, string(body), "object bytes")
+		testing.expect(t, raw_data(body) != storage)
+		network_client.response_destroy(&response)
+		delete(body, context.allocator)
+	}
+	{
+		// An empty body gives a result that frees cleanly.
+		response := s3_test_response("", 0)
+		body, ok := s3_get_body_take(&response, context.allocator)
+		testing.expect(t, ok)
+		testing.expect_value(t, len(body), 0)
+		network_client.response_destroy(&response)
+		delete(body, context.allocator)
+	}
+}
+
+@(test)
+s3_transport_errors_say_whether_to_retry :: proc(t: ^testing.T) {
+	Case :: struct {
+		failure: network_client.HTTP_Error,
+		want:    S3_Error,
+	}
+	cases := []Case {
+		{{kind = .None}, .Unavailable},
+		{{kind = .Invalid_URL}, .Invalid_Input},
+		{{kind = .Insecure_URL}, .Invalid_Input},
+		{{kind = .Invalid_Config}, .Invalid_Input},
+		{{kind = .Invalid_Method}, .Invalid_Input},
+		{{kind = .Invalid_Header}, .Invalid_Input},
+		{{kind = .Reserved_Header}, .Invalid_Input},
+		{{kind = .Address_Rejected}, .Invalid_Input},
+		{{kind = .Redirect_Limit}, .Rejected},
+		{{kind = .Invalid_Redirect}, .Rejected},
+		{{kind = .Unsafe_Redirect}, .Rejected},
+		{{kind = .Body_Oversized, status = 200}, .Too_Large},
+		{{kind = .TLS_Failed, tls_error = tls.Protocol_Error.Unknown_Ca}, .Rejected},
+		{{kind = .TLS_Failed, tls_error = tls.Protocol_Error.Certificate_Expired}, .Rejected},
+		{{kind = .TLS_Failed, tls_error = tls.General_Error.Invalid_Trust_Roots}, .Invalid_Input},
+		{{kind = .TLS_Failed, tls_error = tls.General_Error.Invalid_SNI_Hostname}, .Invalid_Input},
+		{{kind = .TLS_Failed, tls_error = io.Error.Unexpected_EOF}, .Unavailable},
+		{{kind = .TLS_Failed, tls_error = tls.Protocol_Error.Close_Notify}, .Unavailable},
+		{{kind = .TLS_Failed}, .Unavailable},
+		{{kind = .Dial_Failed}, .Unavailable},
+		{{kind = .IO_Failed}, .Unavailable},
+		{{kind = .Deadline_Failed}, .Unavailable},
+		{{kind = .Unexpected_EOF}, .Unavailable},
+		{{kind = .Invalid_Chunk}, .Unavailable},
+		{{kind = .Allocation_Failed}, .Unavailable},
+	}
+	for c in cases {
+		testing.expectf(t, s3_transport_error(c.failure) == c.want, "%v -> %v, want %v", c.failure.kind, s3_transport_error(c.failure), c.want)
 	}
 }
 

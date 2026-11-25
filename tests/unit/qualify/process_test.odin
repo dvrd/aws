@@ -44,7 +44,8 @@ child_past_its_deadline_is_killed_and_reaped :: proc(t: ^testing.T) {
 	_, output, failure := capture_child(&test.runner, {path}, nil, deadline, 32)
 	testing.expect_value(t, failure, Failure.Child_Deadline)
 	testing.expect_value(t, len(output), 0)
-	testing.expect(t, time.tick_since(started) < 5 * time.Second, "the child is not waited for")
+	// Well below the child's 30 s sleep, with room for a sanitizer build.
+	testing.expect(t, time.tick_since(started) < 15 * time.Second, "the child is not waited for")
 }
 
 @(test)
@@ -58,7 +59,7 @@ child_output_over_the_limit_is_discarded :: proc(t: ^testing.T) {
 	_, output, failure := capture_child(&test.runner, {path}, nil, deadline, 32)
 	testing.expect_value(t, failure, Failure.Child_Output_Limit)
 	testing.expect_value(t, len(output), 0)
-	testing.expect(t, time.tick_since(started) < 5 * time.Second, "the child is not waited for")
+	testing.expect(t, time.tick_since(started) < 15 * time.Second, "the child is not waited for")
 }
 
 @(test)

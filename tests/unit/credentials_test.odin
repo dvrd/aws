@@ -26,7 +26,7 @@ profile_reading_preserves_sections_and_bounds :: proc(t: ^testing.T) {
 	defer os.remove(path)
 	fixture :=
 		"# synthetic fixture\n[default]\naws_access_key_id = default-key\naws_secret_access_key = default-secret\n" +
-		"[ selected ]\naws_access_key_id = fixture-key\naws_secret_access_key = fixture-secret\naws_session_token = fixture-token\n"
+		"[selected]\naws_access_key_id = fixture-key\naws_secret_access_key = fixture-secret\naws_session_token = fixture-token\n"
 	testing.expect(t, os.write_entire_file(path, fixture) == nil)
 	credentials, _, _, read_error := credential_profile_load(path, "selected", false)
 	testing.expect_value(t, read_error.kind, .None)
@@ -928,6 +928,9 @@ credential_refresh_leaves_the_callers_temp_allocator_alone :: proc(t: ^testing.T
 credential_test_scratch_role: string
 credential_test_scratch_document: string
 
+// Calls of the token provider in metadata_text_is_printable_before_it_reaches_a_url_or_header.
+credential_test_bad_token_calls: int
+
 @(test)
 credential_scratch_holds_the_largest_resolution :: proc(t: ^testing.T) {
 	// Copies every reply into context.temp_allocator, as Surf's buffered client does.
@@ -1433,15 +1436,13 @@ metadata_text_is_printable_before_it_reaches_a_url_or_header :: proc(t: ^testing
 	testing.expect(t, os.unset_env("AWS_EC2_METADATA_DISABLED"))
 	// An IMDS token with a control character never becomes a header.
 	bad_token :: proc(request: HTTP_Request) -> ([]u8, network_client.Buffered_HTTP_Result) {
-		ses_hardening.status += 1
+		sync.atomic_add(&credential_test_bad_token_calls, 1)
 		return transmute([]u8)string("imds\ttoken"), {ok = true, status = 200}
 	}
-	sync.mutex_lock(&ses_hardening_mutex)
-	defer sync.mutex_unlock(&ses_hardening_mutex)
-	ses_hardening = {}
+	sync.atomic_store(&credential_test_bad_token_calls, 0)
 	_, ok := aws_credentials_with_http(bad_token)
 	testing.expect(t, !ok)
-	testing.expect_value(t, ses_hardening.status, 1)
+	testing.expect_value(t, sync.atomic_load(&credential_test_bad_token_calls), 1)
 	clock := Credential_Test_Clock {
 		now = credential_test_instant("2024-01-01T00:00:00Z"),
 	}
@@ -1449,7 +1450,7 @@ metadata_text_is_printable_before_it_reaches_a_url_or_header :: proc(t: ^testing
 	testing.expect_value(t, credential_cache_init(&cache, bad_token, credential_test_clock, &clock).kind, Credential_Error_Kind.None)
 	defer credential_cache_destroy(&cache)
 	testing.expect_value(t, credential_refresh(&cache).kind, Credential_Error_Kind.Unavailable)
-	testing.expect_value(t, ses_hardening.status, 2)
+	testing.expect_value(t, sync.atomic_load(&credential_test_bad_token_calls), 2)
 }
 
 @(test)
@@ -1506,6 +1507,42 @@ profile_files_are_read_the_way_the_aws_cli_reads_them :: proc(t: ^testing.T) {
 	credentials, _, _, _ := credential_profile_load(path, "default", true)
 	testing.expect_value(t, credentials.secret_key, "s1==")
 	testing.expect_value(t, credentials.session_token, "t=1:2")
+}
+
+@(test)
+profile_section_headers_end_at_the_last_bracket :: proc(t: ^testing.T) {
+	directory, error := os.make_directory_temp("", "aws-header-*", context.allocator)
+	if !testing.expect(t, error == nil) {
+		return
+	}
+	defer delete(directory)
+	defer os.remove(directory)
+	path := fmt.aprintf("%s/credentials", directory)
+	defer delete(path)
+	defer os.remove(path)
+	// The expectations come from botocore 2.34.40: "key" is what profile "prod" gets.
+	Header_Case :: struct {
+		header: string,
+		key:    string,
+	}
+	cases := []Header_Case {
+		{"[prod]", "k1"},
+		{"[prod] junk", "k1"},
+		{"[prod]#c", "k1"},
+		{"[prod]\t; c", "k1"},
+		{"[prod] # see [wiki]", ""},
+		{"[prod] ; [x]", ""},
+		{"[prod]x]", ""},
+		{"[pro]d]", ""},
+		{"[ prod ]", ""},
+	}
+	for entry in cases {
+		text := fmt.aprintf("%s\naws_access_key_id = k1\naws_secret_access_key = s1\n", entry.header)
+		defer delete(text)
+		testing.expect(t, os.write_entire_file(path, text) == nil)
+		credentials, _, _, _ := credential_profile_load(path, "prod", true)
+		testing.expectf(t, credentials.access_key == entry.key, "%q gave %q, want %q", text, credentials.access_key, entry.key)
+	}
 }
 
 @(test)

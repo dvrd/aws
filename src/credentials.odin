@@ -350,10 +350,8 @@ credential_lease_cached :: proc(
 	if cache.closed {
 		return {}, {kind = .Closed}
 	}
-	if credential_snapshot_usable(cache.snapshot, cache.clock(cache.clock_data)) {
-		lease = credential_snapshot_borrow(cache.snapshot)
-		cache.live_readers += 1
-		return lease, {}
+	if borrowed, ok := credential_lease_borrow_locked(cache); ok {
+		return borrowed, {}
 	}
 	if cache.snapshot != nil {
 		return {}, {kind = .Expired, source = cache.snapshot.source}
@@ -492,29 +490,22 @@ credential_lease :: proc(
 		return {}, {kind = .Invalid_Argument}
 	}
 	sync.mutex_lock(&cache.mutex)
+	defer sync.mutex_unlock(&cache.mutex)
 	for {
 		if cache.closed {
-			sync.mutex_unlock(&cache.mutex)
 			return {}, {kind = .Closed}
 		}
 
 		if credential_cancelled(cancel) {
-			sync.mutex_unlock(&cache.mutex)
 			return {}, {kind = .Cancelled}
 		}
 
-		now := cache.clock(cache.clock_data)
-
-		if credential_snapshot_usable(cache.snapshot, now) {
-			lease = credential_snapshot_borrow(cache.snapshot)
-			cache.live_readers += 1
-			sync.mutex_unlock(&cache.mutex)
-			return lease, {}
+		if borrowed, ok := credential_lease_borrow_locked(cache); ok {
+			return borrowed, {}
 		}
 
 		if cache.refresh_active {
 			if cache.waiters >= CREDENTIAL_WAITERS_MAX {
-				sync.mutex_unlock(&cache.mutex)
 				return {}, {kind = .Waiter_Limit}
 			}
 
@@ -530,7 +521,6 @@ credential_lease :: proc(
 			cache.waiters -= 1
 
 			if credential_cancelled(cancel) {
-				sync.mutex_unlock(&cache.mutex)
 				return {}, {kind = .Cancelled}
 			}
 
@@ -538,15 +528,12 @@ credential_lease :: proc(
 				continue
 			}
 
-			now = cache.clock(cache.clock_data)
-
-			if credential_snapshot_usable(cache.snapshot, now) {
+			if credential_snapshot_usable(cache.snapshot, cache.clock(cache.clock_data)) {
 				continue
 			}
 
 			if cache.failed_attempt == target && cache.refresh_error.kind != .None {
 				error = cache.refresh_error
-				sync.mutex_unlock(&cache.mutex)
 				return {}, error
 			}
 
@@ -556,17 +543,11 @@ credential_lease :: proc(
 		credential_refresh_run(cache)
 
 		if credential_cancelled(cancel) {
-			sync.mutex_unlock(&cache.mutex)
 			return {}, {kind = .Cancelled}
 		}
 
-		now = cache.clock(cache.clock_data)
-
-		if credential_snapshot_usable(cache.snapshot, now) {
-			lease = credential_snapshot_borrow(cache.snapshot)
-			cache.live_readers += 1
-			sync.mutex_unlock(&cache.mutex)
-			return lease, {}
+		if borrowed, ok := credential_lease_borrow_locked(cache); ok {
+			return borrowed, {}
 		}
 
 		error = cache.refresh_error
@@ -575,7 +556,6 @@ credential_lease :: proc(
 			error.kind = .Unavailable
 		}
 
-		sync.mutex_unlock(&cache.mutex)
 		return {}, error
 	}
 }
@@ -776,6 +756,17 @@ credential_snapshot_borrow :: proc(snap: ^Credential_Snapshot) -> Credential_Lea
 		secret_key = snap.secret_key,
 		session_token = snap.session_token,
 	}
+}
+
+// Borrows the snapshot when it is usable now. The caller holds the mutex.
+@(private)
+credential_lease_borrow_locked :: proc(cache: ^Credential_Cache) -> (lease: Credential_Lease, ok: bool) {
+	if !credential_snapshot_usable(cache.snapshot, cache.clock(cache.clock_data)) {
+		return {}, false
+	}
+	lease = credential_snapshot_borrow(cache.snapshot)
+	cache.live_readers += 1
+	return lease, true
 }
 
 @(private)
@@ -1296,10 +1287,11 @@ credential_profile_load :: proc(
 			continue
 		}
 
-		// A header may be followed by a comment: "[default] # note".
+		// The header is everything between the first '[' and the last ']', spaces
+		// included, as the AWS CLI reads it; text after the last ']' is ignored.
 		if line[0] == '[' {
 			if closing := strings.last_index_byte(line, ']'); closing > 0 {
-				section = strings.trim_space(line[1:closing])
+				section = line[1:closing]
 				continue
 			}
 		}

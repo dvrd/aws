@@ -68,7 +68,7 @@ main :: proc() {
 			passed &&
 			status == 0 &&
 			result.status == 0 &&
-			result.error == .Unavailable &&
+			result.error == .Rejected &&
 			result.effect == .Not_Sent
 	} else {
 		os.exit(2)

@@ -22,3 +22,11 @@ the_loopback_programs_are_where_the_task_builds_them :: proc(t: ^testing.T) {
 	}
 	testing.expect(t, os.is_file(LOOPBACK_OBSERVATION))
 }
+
+@(test)
+ready_port_requires_a_complete_line :: proc(t: ^testing.T) {
+	context.allocator = context.temp_allocator
+	testing.expect_value(t, ready_port("ready 12"), 0)
+	testing.expect_value(t, ready_port("ready 12345\n"), 12345)
+	testing.expect_value(t, ready_port("noise\n"), 0)
+}

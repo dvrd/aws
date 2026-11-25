@@ -134,9 +134,17 @@ test_command :: proc(arguments: []string) -> int {
 	options: for index < len(arguments) {
 		switch arguments[index] {
 		case "--shared":
-			dependencies = option_value(arguments, &index) or_else ""
+			value, ok := option_value(arguments, &index)
+			if !ok || value == "" {
+				return fail("--shared needs a directory")
+			}
+			dependencies = value
 		case "--package":
-			selected = option_value(arguments, &index) or_else ""
+			value, ok := option_value(arguments, &index)
+			if !ok || value == "" {
+				return fail("--package needs a directory under tests/")
+			}
+			selected = value
 		case "--":
 			index += 1
 			break options
@@ -152,24 +160,12 @@ test_command :: proc(arguments: []string) -> int {
 		}
 		append(&user, flag)
 	}
-	if selected == "" || dependencies == "" || !os.is_directory(dependencies) {
+	if dependencies == "" || !os.is_directory(dependencies) {
 		return fail("no shared collection at %q", dependencies)
 	}
 	root := root_directory()
 	if !os.is_directory(fmt.aprintf("%s/src", root)) {
 		return fail("no src/ in %s", root)
-	}
-	homes := homes_find(root)
-	if problems := layout_problems(root, homes); len(problems) > 0 {
-		for problem in problems {
-			fmt.eprintln(problem)
-		}
-		return 2
-	}
-
-	suites := suites_find(root, selected, homes)
-	if len(suites) == 0 {
-		return fail("no matching test suites")
 	}
 	work, created := work_directory("tests")
 	if !created {
@@ -182,6 +178,18 @@ test_command :: proc(arguments: []string) -> int {
 	repository := fmt.aprintf("%s/repository", work)
 	if !repository_stage(root, repository) {
 		return fail("cannot stage the checkout")
+	}
+	homes := homes_find(repository)
+	if problems := layout_problems(repository, homes); len(problems) > 0 {
+		for problem in problems {
+			fmt.eprintln(problem)
+		}
+		return 2
+	}
+
+	suites := suites_find(repository, selected, homes)
+	if len(suites) == 0 {
+		return fail("no matching test suites")
 	}
 	if escapes := imports_escaping(repository); len(escapes) > 0 {
 		fmt.eprintln("Relative imports leave the repository; use shared:<library> instead:")
@@ -248,13 +256,15 @@ suite_flags :: proc(user: []string, shared, output: string) -> []string {
 // The package of home, its support files and the suite's files, in one directory.
 suite_stage :: proc(repository, target: string, home: Home, suite: Suite) -> (directory: string, ok: bool) {
 	directory_ensure(target) or_return
+	origins := make(map[string]string)
 	for source in ([]string{home.source, fmt.aprintf("tests/support/%s", home.name), suite.relative}) {
 		for name in odin_files(fmt.aprintf("%s/%s", repository, source)) {
 			destination := fmt.aprintf("%s/%s", target, name)
-			if os.exists(destination) {
-				fmt.eprintf("tasks: %s/%s clashes with a file of the same name in %s\n", source, name, home.source)
+			if other, found := origins[name]; found {
+				fmt.eprintf("tasks: %s/%s clashes with %s/%s\n", source, name, other, name)
 				return "", false
 			}
+			origins[name] = source
 			if os.copy_file(destination, fmt.aprintf("%s/%s/%s", repository, source, name)) != nil {
 				return "", false
 			}

@@ -37,7 +37,9 @@ loopback_command :: proc(arguments: []string) -> int {
 	if mode == "" && report != "" {
 		return fail("--report needs --mode")
 	}
-	sanitizer_clang_select()
+	if !sanitizer_clang_select() {
+		return 1
+	}
 	for candidate in ([]string{"default", "observer"}) {
 		if mode != "" && mode != candidate {
 			continue

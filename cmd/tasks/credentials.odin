@@ -48,7 +48,9 @@ credentials_command :: proc(arguments: []string) -> int {
 	if !staged {
 		return fail("cannot stage the shared collection")
 	}
-	sanitizer_clang_select()
+	if !sanitizer_clang_select() {
+		return 1
+	}
 	fixture := fmt.aprintf("%s/fixture", work)
 	if code := run(
 		{

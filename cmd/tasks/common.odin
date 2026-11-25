@@ -96,31 +96,74 @@ stage_collection :: proc(work: string) -> (shared: string, ok: bool) {
 	return shared, true
 }
 
+clang_major :: proc(version_text: string) -> string {
+	marker :: "clang version "
+	at := strings.index(version_text, marker)
+	if at < 0 {
+		return ""
+	}
+	digits := version_text[at + len(marker):]
+	end := 0
+	for end < len(digits) && digits[end] >= '0' && digits[end] <= '9' {
+		end += 1
+	}
+	return digits[:end]
+}
+
+// Prefer an explicit linker, then a versioned clang, then a matching system clang.
+sanitizer_clang_choose :: proc(
+	explicit, backend_major, system_major: string,
+	candidates: []string,
+	exists: proc(path: string) -> bool,
+) -> (path: string, ok: bool, message: string) {
+	if explicit != "" {
+		return explicit, true, ""
+	}
+	if backend_major == "" {
+		return "", true, ""
+	}
+	for candidate in candidates {
+		if exists(candidate) {
+			return candidate, true, ""
+		}
+	}
+	if system_major == backend_major {
+		return "", true, ""
+	}
+	return "", false, fmt.aprintf("need clang %s: install llvm@%s or set ODIN_CLANG_PATH", backend_major, backend_major)
+}
+
 // Sanitized builds link the address sanitizer runtime of the clang that does the
 // linking, which must match the LLVM Odin was built with. Unless ODIN_CLANG_PATH
 // is already set, prefer a clang of that major version installed beside the
 // system one.
-sanitizer_clang_select :: proc() {
-	if value, found := os.lookup_env("ODIN_CLANG_PATH", context.allocator); found && value != "" {
-		return
-	}
-	report, code := output({compiler(), "report"})
+sanitizer_clang_select :: proc() -> (ok: bool) {
+	explicit, _ := os.lookup_env("ODIN_CLANG_PATH", context.allocator)
+	report, report_code := output({compiler(), "report"})
 	marker :: "Backend: LLVM "
-	at := strings.index(report, marker)
-	if code != 0 || at < 0 {
-		return
-	}
-	major := report[at + len(marker):]
-	if dot := strings.index_any(major, ".\n "); dot >= 0 {
-		major = major[:dot]
-	}
-	for pattern in ([]string{"/opt/homebrew/opt/llvm@%s/bin/clang", "/usr/local/opt/llvm@%s/bin/clang", "/usr/lib/llvm-%s/bin/clang"}) {
-		candidate := fmt.aprintf(pattern, major)
-		if major != "" && os.is_file(candidate) {
-			os.set_env("ODIN_CLANG_PATH", candidate)
-			return
+	major := ""
+	if at := strings.index(report, marker); report_code == 0 && at >= 0 {
+		major = report[at + len(marker):]
+		if dot := strings.index_any(major, ".\n "); dot >= 0 {
+			major = major[:dot]
 		}
 	}
+	candidates := []string{
+		fmt.aprintf("/opt/homebrew/opt/llvm@%s/bin/clang", major),
+		fmt.aprintf("/usr/local/opt/llvm@%s/bin/clang", major),
+		fmt.aprintf("/usr/lib/llvm-%s/bin/clang", major),
+	}
+	version, version_code := output({"clang", "--version"})
+	system_major := clang_major(version) if version_code == 0 else ""
+	path, chosen, message := sanitizer_clang_choose(explicit, major, system_major, candidates, os.is_file)
+	if !chosen {
+		fail("%s", message)
+		return false
+	}
+	if path != "" {
+		os.set_env("ODIN_CLANG_PATH", path)
+	}
+	return true
 }
 
 // One child process in its own session, so a deadline can end everything it

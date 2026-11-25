@@ -52,10 +52,16 @@ tasks:
       - build/tasks test {{.CLI_ARGS}}
 
   test:signatures:
-    desc: Recalculate the SigV4 fixtures with OpenSSL
+    desc: Check the SigV4 reference signatures by recomputing them with OpenSSL
     deps: [tasks]
     cmds:
       - build/tasks signatures
+
+  test:layout:
+    desc: Check that every source file has a unit test file of the same name
+    deps: [tasks]
+    cmds:
+      - build/tasks layout
 
   test:consumer:
     desc: Build and run a consumer that vendors the library

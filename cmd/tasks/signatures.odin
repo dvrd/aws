@@ -5,8 +5,9 @@ import "core:fmt"
 import "core:os"
 import "core:strings"
 
-// Recalculates the SigV4 fixtures with OpenSSL, independently of the library and
-// of Odin's own HMAC, using public synthetic AWS example credentials.
+// Checks the SigV4 reference signatures by recomputing them with OpenSSL,
+// independently of the library and of Odin's own HMAC, using public synthetic
+// AWS example credentials. It compares; it never regenerates them.
 SIGNATURE_SECRET :: "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY"
 SIGNATURE_STAMP :: "20130524T000000Z"
 SIGNATURE_REGION :: "us-east-1"
@@ -103,8 +104,10 @@ signatures_command :: proc(arguments: []string) -> int {
 		),
 		"ses",
 	)
-	if !state.ok {
-		return fail("openssl failed")
+	// botocore 2.34.40 signs the same request to the same value
+	// (tests/conformance/botocore_test.odin).
+	if !state.ok || ses != "e99a4c5a7187beeb1818b101c484bbee3869e6b24eac0d093e2111c1a4ce0153" {
+		return fail("SES signature mismatch")
 	}
 	fmt.printf("SES POST %s\n", ses)
 	return 0

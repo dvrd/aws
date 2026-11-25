@@ -497,6 +497,8 @@ plan :: proc(runner: ^Runner) -> (result: json.Object, failure: Failure) {
 
 // An instant with an explicit zone: YYYY-MM-DDTHH:MM:SS[.fraction](Z|+HH:MM|-HH:MM).
 // The fraction is dropped, which can only make an expiry look earlier.
+// Mirrors credential_instant_parse in src/credentials.odin (private there) and
+// must stay in step with it.
 instant_parse :: proc(text: string) -> (instant: time.Time, ok: bool) {
 	number :: proc(text: string) -> (value: int, ok: bool) {
 		for index in 0 ..< len(text) {
@@ -507,7 +509,7 @@ instant_parse :: proc(text: string) -> (instant: time.Time, ok: bool) {
 		}
 		return value, len(text) > 0
 	}
-	if len(text) < 20 || text[4] != '-' || text[7] != '-' || text[10] != 'T' || text[13] != ':' || text[16] != ':' {
+	if len(text) < 20 || len(text) > 64 || text[4] != '-' || text[7] != '-' || text[10] != 'T' || text[13] != ':' || text[16] != ':' {
 		return {}, false
 	}
 	year := number(text[0:4]) or_return
@@ -584,7 +586,7 @@ temporary_environment :: proc(
 	}
 	expiration, expiration_set := runner.variable(runner, "AWS_CREDENTIAL_EXPIRATION")
 	parsed := false
-	if expiration_set && len(expiration) <= 64 {
+	if expiration_set {
 		expiry, parsed = instant_parse(expiration)
 	}
 	if !parsed {

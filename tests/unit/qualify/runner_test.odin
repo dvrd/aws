@@ -454,6 +454,12 @@ instants_need_an_explicit_zone_and_apply_it :: proc(t: ^testing.T) {
 		_, ok := instant_parse(text)
 		testing.expect(t, !ok, text)
 	}
+	fraction := strings.repeat("1", 50)
+	defer delete(fraction)
+	long := strings.concatenate({"2030-01-02T03:04:05.", fraction, "Z"})
+	defer delete(long)
+	_, long_ok := instant_parse(long)
+	testing.expect(t, !long_ok, "a 65-byte instant")
 }
 
 @(test)

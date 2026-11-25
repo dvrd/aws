@@ -6,6 +6,7 @@ import "core:bytes"
 import "core:crypto/hash"
 import "core:encoding/hex"
 import "core:fmt"
+import "core:io"
 import "core:mem"
 import "core:os"
 import "core:strings"
@@ -1281,7 +1282,9 @@ put_and_delete_report_typed_outcomes :: proc(t: ^testing.T) {
 		{{status = 429, transport_ok = true}, {429, false, .Unavailable, .Response_Received}},
 		{{status = 200, ok = false}, {200, false, .Unavailable, .Response_Received}},
 		{{status = 0, error = {kind = .IO_Failed, write_effect = .Unknown}}, {0, false, .Unavailable, .Unknown}},
-		{{status = 0, error = {kind = .Invalid_Config, write_effect = .Not_Sent}}, {0, false, .Unavailable, .Not_Sent}},
+		{{status = 0, error = {kind = .Invalid_Config, write_effect = .Not_Sent}}, {0, false, .Invalid_Input, .Not_Sent}},
+		{{status = 0, error = {kind = .TLS_Failed, tls_error = tls.Protocol_Error.Unknown_Ca, write_effect = .Not_Sent}}, {0, false, .Rejected, .Not_Sent}},
+		{{status = 0}, {0, false, .Unavailable, .Unknown}},
 	}
 	for c in cases {
 		fixture.result = c.answer
@@ -1349,6 +1352,44 @@ status_classifier_matches_the_documented_rule :: proc(t: ^testing.T) {
 	}
 	for c in cases {
 		testing.expect_value(t, s3_status_error(c.status), c.want)
+	}
+}
+
+@(test)
+s3_transport_errors_say_whether_to_retry :: proc(t: ^testing.T) {
+	Case :: struct {
+		failure: network_client.HTTP_Error,
+		want:    S3_Error,
+	}
+	cases := []Case {
+		{{kind = .None}, .Unavailable},
+		{{kind = .Invalid_URL}, .Invalid_Input},
+		{{kind = .Insecure_URL}, .Invalid_Input},
+		{{kind = .Invalid_Config}, .Invalid_Input},
+		{{kind = .Invalid_Method}, .Invalid_Input},
+		{{kind = .Invalid_Header}, .Invalid_Input},
+		{{kind = .Reserved_Header}, .Invalid_Input},
+		{{kind = .Address_Rejected}, .Invalid_Input},
+		{{kind = .Redirect_Limit}, .Rejected},
+		{{kind = .Invalid_Redirect}, .Rejected},
+		{{kind = .Unsafe_Redirect}, .Rejected},
+		{{kind = .Body_Oversized, status = 200}, .Too_Large},
+		{{kind = .TLS_Failed, tls_error = tls.Protocol_Error.Unknown_Ca}, .Rejected},
+		{{kind = .TLS_Failed, tls_error = tls.Protocol_Error.Certificate_Expired}, .Rejected},
+		{{kind = .TLS_Failed, tls_error = tls.General_Error.Invalid_Trust_Roots}, .Invalid_Input},
+		{{kind = .TLS_Failed, tls_error = tls.General_Error.Invalid_SNI_Hostname}, .Invalid_Input},
+		{{kind = .TLS_Failed, tls_error = io.Error.Unexpected_EOF}, .Unavailable},
+		{{kind = .TLS_Failed, tls_error = tls.Protocol_Error.Close_Notify}, .Unavailable},
+		{{kind = .TLS_Failed}, .Unavailable},
+		{{kind = .Dial_Failed}, .Unavailable},
+		{{kind = .IO_Failed}, .Unavailable},
+		{{kind = .Deadline_Failed}, .Unavailable},
+		{{kind = .Unexpected_EOF}, .Unavailable},
+		{{kind = .Invalid_Chunk}, .Unavailable},
+		{{kind = .Allocation_Failed}, .Unavailable},
+	}
+	for c in cases {
+		testing.expectf(t, s3_transport_error(c.failure) == c.want, "%v -> %v, want %v", c.failure.kind, s3_transport_error(c.failure), c.want)
 	}
 }
 

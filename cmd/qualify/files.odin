@@ -176,44 +176,101 @@ sha256_hex :: proc(data: []u8) -> string {
 	return string(hex.encode(digest[:]))
 }
 
-// Digest of the native probe: an absolute, regular, executable file that group and
-// others cannot write.
-binary_hash :: proc(path: string) -> (digest: string, failure: Failure) {
+PROBE_NAME :: "probe"
+
+// Opens the native probe without following a link and checks the open file: an
+// absolute, regular, executable file owned by this user that group and others
+// cannot write. binary_hash and probe_install share it so the checks cannot drift.
+probe_open :: proc(path: string) -> (descriptor: posix.FD, failure: Failure) {
 	if !os.is_absolute_path(path) {
-		return "", .Absolute_Binary_Required
+		return -1, .Absolute_Binary_Required
 	}
-	name := strings.clone_to_cstring(path)
-	descriptor := posix.open(name, {.NOFOLLOW})
+	descriptor = posix.open(strings.clone_to_cstring(path), {.NOFOLLOW, .NONBLOCK, .CLOEXEC})
 	if descriptor < 0 {
-		return "", .System
+		return -1, .System
 	}
-	defer posix.close(descriptor)
 	info: posix.stat_t
 	if posix.fstat(descriptor, &info) != .OK {
-		return "", .System
+		posix.close(descriptor)
+		return -1, .System
 	}
 	if !posix.S_ISREG(info.st_mode) ||
 	   info.st_size > BINARY_BYTES_MAX ||
+	   info.st_uid != posix.geteuid() ||
 	   permission_bits(info.st_mode) & 0o022 != 0 ||
-	   posix.access(name, {.X_OK}) != .OK {
-		return "", .Executable_Required
+	   .IXUSR not_in info.st_mode {
+		posix.close(descriptor)
+		return -1, .Executable_Required
 	}
+	return descriptor, .None
+}
+
+// Digest of everything read from source, also written to copy unless copy is -1.
+probe_digest :: proc(source: posix.FD, copy: posix.FD = -1) -> (digest: string, failure: Failure) {
 	hasher: hash.Context
 	hash.init(&hasher, .SHA256)
 	buffer := make([]u8, 64 * 1024)
+	defer delete(buffer)
+	total := 0
 	for {
-		count := posix.read(descriptor, raw_data(buffer), c.size_t(len(buffer)))
+		count := posix.read(source, raw_data(buffer), c.size_t(len(buffer)))
 		if count < 0 {
 			return "", .System
 		}
 		if count == 0 {
 			break
 		}
+		total += int(count)
+		if total > BINARY_BYTES_MAX {
+			return "", .Executable_Required
+		}
 		hash.update(&hasher, buffer[:count])
+		if copy >= 0 && !write_all(copy, buffer[:count]) {
+			return "", .System
+		}
 	}
 	sum: [32]u8
 	hash.final(&hasher, sum[:])
 	return string(hex.encode(sum[:])), .None
+}
+
+// Digest of the native probe: an absolute, regular, executable file owned by this
+// user that group and others cannot write.
+binary_hash :: proc(path: string) -> (digest: string, failure: Failure) {
+	descriptor := probe_open(path) or_return
+	defer posix.close(descriptor)
+	return probe_digest(descriptor)
+}
+
+// Copies the probe at source into directory/PROBE_NAME (mode 0700, never
+// following or replacing a link) and returns the digest of the bytes written,
+// which are the bytes read from the descriptor the probe checks were made on.
+probe_install :: proc(source, directory: string) -> (digest: string, failure: Failure) {
+	descriptor := probe_open(source) or_return
+	defer posix.close(descriptor)
+	destination := strings.clone_to_cstring(strings.concatenate({directory, "/", PROBE_NAME}))
+	mode := posix.mode_t{.IRUSR, .IWUSR, .IXUSR}
+	copy := posix.open(destination, {.WRONLY, .CREAT, .EXCL, .NOFOLLOW, .CLOEXEC}, mode)
+	if copy < 0 {
+		info: posix.stat_t
+		if posix.lstat(destination, &info) != .OK || !posix.S_ISREG(info.st_mode) || posix.unlink(destination) != .OK {
+			return "", .System
+		}
+		copy = posix.open(destination, {.WRONLY, .CREAT, .EXCL, .NOFOLLOW, .CLOEXEC}, mode)
+		if copy < 0 {
+			return "", .System
+		}
+	}
+	copied, copy_failure := probe_digest(descriptor, copy)
+	if copy_failure == .None && posix.fsync(copy) != .OK {
+		copy_failure = .System
+	}
+	posix.close(copy)
+	if copy_failure != .None {
+		posix.unlink(destination)
+		return "", copy_failure
+	}
+	return copied, .None
 }
 
 path_present :: proc(path: string) -> bool {

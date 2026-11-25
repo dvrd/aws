@@ -1287,10 +1287,11 @@ credential_profile_load :: proc(
 			continue
 		}
 
-		// A header may be followed by a comment: "[default] # note".
+		// The header is everything between the first '[' and the last ']', spaces
+		// included, as the AWS CLI reads it; text after the last ']' is ignored.
 		if line[0] == '[' {
 			if closing := strings.last_index_byte(line, ']'); closing > 0 {
-				section = strings.trim_space(line[1:closing])
+				section = line[1:closing]
 				continue
 			}
 		}

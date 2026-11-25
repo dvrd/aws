@@ -26,7 +26,7 @@ profile_reading_preserves_sections_and_bounds :: proc(t: ^testing.T) {
 	defer os.remove(path)
 	fixture :=
 		"# synthetic fixture\n[default]\naws_access_key_id = default-key\naws_secret_access_key = default-secret\n" +
-		"[ selected ]\naws_access_key_id = fixture-key\naws_secret_access_key = fixture-secret\naws_session_token = fixture-token\n"
+		"[selected]\naws_access_key_id = fixture-key\naws_secret_access_key = fixture-secret\naws_session_token = fixture-token\n"
 	testing.expect(t, os.write_entire_file(path, fixture) == nil)
 	credentials, _, _, read_error := credential_profile_load(path, "selected", false)
 	testing.expect_value(t, read_error.kind, .None)

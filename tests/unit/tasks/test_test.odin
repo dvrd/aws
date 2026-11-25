@@ -143,3 +143,28 @@ suites_fail_on_bad_memory_unless_the_user_decides :: proc(t: ^testing.T) {
 	testing.expect(t, !strings.contains(mine, SUITE_MEMORY_FLAG), mine)
 	testing.expect(t, !strings.contains(mine, "-out:/out/tests"), mine)
 }
+
+@(test)
+ignored_files_are_neither_suites_nor_sources :: proc(t: ^testing.T) {
+	context.allocator = context.temp_allocator
+	root := checkout_make(
+		t,
+		{
+			{".gitignore", "tests/ignored/\nsrc/scratch.odin\n"},
+			{"src/s3.odin", "package aws\n"},
+			{"tests/unit/s3_test.odin", "package aws\n"},
+			{"tests/ignored/x_test.odin", "package aws\n"},
+			{"src/scratch.odin", "package aws\n"},
+		},
+	)
+	defer os.remove_all(root)
+	testing.expect_value(t, run({"git", "-C", root, "init", "-q"}), 0)
+	repository := fmt.aprintf("%s/repository", root)
+	testing.expect(t, repository_stage(root, repository))
+	homes := homes_find(repository)
+	suites := suites_find(repository, "all", homes)
+	if testing.expect_value(t, len(suites), 1) {
+		testing.expect_value(t, suites[0].owner, "unit")
+	}
+	testing.expect_value(t, len(layout_problems(repository, homes)), 0)
+}

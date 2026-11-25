@@ -60,6 +60,7 @@ credentials_command :: proc(arguments: []string) -> int {
 			"-warnings-as-errors",
 			fmt.aprintf("-out:%s", fixture),
 		},
+		timeout = BUILD_TIMEOUT,
 	); code != 0 {
 		return code
 	}
@@ -117,7 +118,7 @@ credentials_command :: proc(arguments: []string) -> int {
 		if !started {
 			return fail("cannot start the fixture")
 		}
-		code, finished := wait(child, 5 * time.Second)
+		code, finished := wait(&child, 5 * time.Second)
 		if !finished {
 			return fail("credential fixture %s did not finish", mode)
 		}

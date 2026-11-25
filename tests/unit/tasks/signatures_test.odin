@@ -1,5 +1,6 @@
 package main
 
+import "core:fmt"
 import "core:os"
 import "core:testing"
 
@@ -27,4 +28,14 @@ openssl_digests_and_the_aws_example_signature :: proc(t: ^testing.T) {
 		"aeeed9bbccd4d02ee5c0109b86d86835f995330da4c265957d157751f604d404",
 	)
 	testing.expect(t, state.ok)
+	ses_canonical := fmt.aprintf(
+		"POST\n/v2/email/outbound-emails\n\ncontent-type:application/json\nhost:email.us-east-1.amazonaws.com\nx-amz-date:%s\n\ncontent-type;host;x-amz-date\n%s",
+		SIGNATURE_STAMP,
+		openssl_digest(&state, `{"fixture":true}`),
+	)
+	testing.expect_value(
+		t,
+		signature(&state, ses_canonical, "ses"),
+		"e99a4c5a7187beeb1818b101c484bbee3869e6b24eac0d093e2111c1a4ce0153",
+	)
 }

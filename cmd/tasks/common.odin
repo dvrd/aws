@@ -9,6 +9,10 @@ import "core:strings"
 import "core:sys/posix"
 import "core:time"
 
+BUILD_TIMEOUT :: 120 * time.Second
+// A program the tasks build and run: the native-errors driver, the consumer.
+RUN_TIMEOUT :: 120 * time.Second
+
 compiler :: proc() -> string {
 	if value, found := os.lookup_env("ODIN", context.allocator); found && value != "" {
 		return value
@@ -67,24 +71,25 @@ root_directory :: proc() -> string {
 	return directory
 }
 
-// A collection with aws from this checkout and every other library linked from
-// the shared collection.
+// A collection with aws from this checkout and the pinned dependencies.
 stage_collection :: proc(work: string) -> (shared: string, ok: bool) {
 	shared = fmt.aprintf("%s/shared", work)
 	if os.make_directory(shared) != nil || os.symlink(fmt.aprintf("%s/src", root_directory()), fmt.aprintf("%s/aws", shared)) != nil {
 		return "", false
 	}
 	source, _ := os.get_absolute_path(shared_source(), context.allocator)
-	entries, error := os.read_all_directory_by_path(source, context.allocator)
-	if error != nil {
-		fail("no shared collection at %s", source)
+	pins, parsed := pins_read(root_directory())
+	if !parsed {
+		fail("cannot read .krs/packages.json")
 		return "", false
 	}
-	for entry in entries {
-		if entry.name == "aws" || strings.has_prefix(entry.name, ".") || !os.is_directory(entry.fullpath) {
-			continue
+	for pin in pins {
+		path := fmt.aprintf("%s/%s", source, pin.name)
+		if !os.is_directory(path) {
+			fail("shared:%s is pinned but not in %s", pin.name, source)
+			return "", false
 		}
-		if os.symlink(entry.fullpath, fmt.aprintf("%s/%s", shared, entry.name)) != nil {
+		if os.symlink(path, fmt.aprintf("%s/%s", shared, pin.name)) != nil {
 			return "", false
 		}
 	}
@@ -131,7 +136,9 @@ Spawn :: struct {
 }
 
 Child :: struct {
-	pid: posix.pid_t,
+	pid:    posix.pid_t,
+	reaped: bool,
+	status: c.int, // valid when reaped
 }
 
 spawn :: proc(options: Spawn) -> (child: Child, ok: bool) {
@@ -153,9 +160,6 @@ spawn :: proc(options: Spawn) -> (child: Child, ok: bool) {
 		stderr = posix.open(strings.clone_to_cstring(options.errors), {.WRONLY, .CREAT, .TRUNC}, {.IRUSR, .IWUSR})
 	}
 	pid := posix.fork()
-	if pid < 0 {
-		return {}, false
-	}
 	if pid == 0 {
 		// Only system calls from here.
 		posix.setsid()
@@ -188,17 +192,20 @@ spawn :: proc(options: Spawn) -> (child: Child, ok: bool) {
 	if stderr >= 0 {
 		posix.close(stderr)
 	}
-	return {pid}, true
+	if pid < 0 {
+		return {}, false
+	}
+	return {pid = pid}, true
 }
 
 // The exit code of child, or finished == false after it outlived timeout and was
 // killed with its whole session. A zero timeout waits without limit.
-wait :: proc(child: Child, timeout: time.Duration = 0) -> (code: int, finished: bool) {
+wait :: proc(child: ^Child, timeout: time.Duration = 0) -> (code: int, finished: bool) {
 	started := time.tick_now()
-	status: c.int
-	for {
-		result := posix.waitpid(child.pid, &status, {.NOHANG} if timeout > 0 else {})
+	for !child.reaped {
+		result := posix.waitpid(child.pid, &child.status, {.NOHANG} if timeout > 0 else {})
 		if result == child.pid {
+			child.reaped = true
 			break
 		}
 		if result < 0 && posix.errno() != .EINTR {
@@ -210,23 +217,43 @@ wait :: proc(child: Child, timeout: time.Duration = 0) -> (code: int, finished: 
 		}
 		time.sleep(5 * time.Millisecond)
 	}
-	if posix.WIFEXITED(status) {
-		return int(posix.WEXITSTATUS(status)), true
+	if posix.WIFEXITED(child.status) {
+		return int(posix.WEXITSTATUS(child.status)), true
 	}
-	return 128 + int(posix.WTERMSIG(status)), true
+	return 128 + int(posix.WTERMSIG(child.status)), true
 }
 
-alive :: proc(child: Child) -> bool {
-	return posix.kill(child.pid, .NONE) == .OK
+alive :: proc(child: ^Child) -> bool {
+	for !child.reaped {
+		result := posix.waitpid(child.pid, &child.status, {.NOHANG})
+		if result < 0 && posix.errno() == .EINTR {
+			continue
+		}
+		child.reaped = result == child.pid
+		return result == 0
+	}
+	return false
 }
 
-// Ends the child's session and reaps it.
-stop :: proc(child: Child) {
-	status: c.int
+// Ends the child and the session it started, and reaps it. The child is signalled
+// first because it may not have called setsid yet.
+stop :: proc(child: ^Child) {
+	if child.reaped {
+		return
+	}
+	posix.kill(child.pid, .SIGTERM)
 	posix.killpg(child.pid, .SIGTERM)
 	time.sleep(50 * time.Millisecond)
+	posix.kill(child.pid, .SIGKILL)
 	posix.killpg(child.pid, .SIGKILL)
-	posix.waitpid(child.pid, &status, {})
+	for {
+		result := posix.waitpid(child.pid, &child.status, {})
+		if result < 0 && posix.errno() == .EINTR {
+			continue
+		}
+		child.reaped = result == child.pid
+		break
+	}
 }
 
 // Runs a command with this process's output and returns its exit code; 124 means
@@ -236,7 +263,7 @@ run :: proc(command: []string, directory := "", timeout: time.Duration = 0) -> i
 	if !started {
 		return fail("cannot start %s", command[0])
 	}
-	code, finished := wait(child, timeout)
+	code, finished := wait(&child, timeout)
 	if !finished {
 		fmt.eprintf("tasks: %s did not finish in %v\n", command[0], timeout)
 		return 124

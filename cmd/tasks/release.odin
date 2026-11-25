@@ -157,6 +157,27 @@ plan_valid :: proc(plan: Plan) -> bool {
 	return true
 }
 
+Release_Options :: struct {
+	stable, allow_drift, push: bool,
+}
+
+release_options :: proc(arguments: []string) -> (options: Release_Options, ok: bool) {
+	for argument in arguments {
+		switch argument {
+		case "--stable":
+			options.stable = true
+		case "--push":
+			options.push = true
+		case "--allow-drift":
+			options.allow_drift = true
+		case:
+			fail("unknown option: %s", argument)
+			return {}, false
+		}
+	}
+	return options, true
+}
+
 // --stable publishes v1.0.0. It is refused once the library is past v1.
 stable_option :: proc(arguments: []string) -> (stable: bool, ok: bool) {
 	for argument in arguments {
@@ -250,7 +271,7 @@ version_command :: proc(arguments: []string) -> int {
 }
 
 release_command :: proc(arguments: []string) -> int {
-	stable, parsed := stable_option(arguments)
+	options, parsed := release_options(arguments)
 	if !parsed {
 		return 64
 	}
@@ -262,16 +283,24 @@ release_command :: proc(arguments: []string) -> int {
 	if strings.trim_space(changes) != "" {
 		return fail("commit or stash every change before releasing")
 	}
-	plan, planned := release_plan(stable)
+	plan, planned := release_plan(options.stable)
 	if !planned {
 		return fail("cannot read the Git history")
 	}
 	if !plan_valid(plan) {
 		return 1
 	}
-	if len(plan.subjects) == 0 && !stable {
+	if len(plan.subjects) == 0 && !options.stable {
 		plan_print(plan)
 		return 0
+	}
+	if !options.allow_drift {
+		if code := deps_command({"--strict"}); code != 0 {
+			return fail("the shared collection differs from .krs/packages.json; release against the pins or pass --allow-drift")
+		}
+		if code := odin_command({"--strict"}); code != 0 {
+			return fail("the compiler differs from ODIN_COMMIT; rebuild it, run task odin:pin, or pass --allow-drift")
+		}
 	}
 	if code := check_command(nil); code != 0 {
 		return code
@@ -291,10 +320,24 @@ release_command :: proc(arguments: []string) -> int {
 	if os.write_entire_file(file, strings.to_string(message)) != nil {
 		return fail("cannot write the tag message")
 	}
+	if options.push {
+		local, local_code := output({"git", "rev-parse", "HEAD"})
+		remote, code := output({"git", "rev-parse", "@{upstream}"})
+		if local_code != 0 || code != 0 || strings.trim_space(local) != strings.trim_space(remote) {
+			return fail("push main to its upstream before publishing a release")
+		}
+	}
 	if code := run({"git", "tag", "-a", plan.next, "-F", file}); code != 0 {
 		return code
 	}
 	head, _ := output({"git", "rev-parse", "--short", "HEAD"})
 	fmt.printf("Tagged %s at %s. Consumers: krs update aws@%s\n", plan.next, strings.trim_space(head), plan.next)
+	if options.push {
+		if code := run({"git", "push", "origin", fmt.tprintf("refs/tags/%s", plan.next)}); code != 0 {
+			return fail("tagged %s locally, but the push failed; retry with git push origin %s", plan.next, plan.next)
+		}
+	} else {
+		fmt.printf("Not published: run git push origin %s to make it installable elsewhere.\n", plan.next)
+	}
 	return 0
 }

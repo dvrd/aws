@@ -8,6 +8,7 @@ package main
 import "core:crypto"
 import "core:encoding/hex"
 import "core:encoding/json"
+import "core:os"
 import "core:strings"
 import "core:sys/posix"
 import "core:time"
@@ -297,13 +298,17 @@ scope_valid :: proc(scope: json.Object) -> Failure {
 			return .Scope_Resource_Invalid
 		}
 	}
-	_, write_set := boolean_of(scope, "allow_write")
+	allow_write, write_set := boolean_of(scope, "allow_write")
 	allow_ses, ses_set := boolean_of(scope, "allow_ses")
 	if !write_set || !ses_set {
 		return .Scope_Policy_Invalid
 	}
 	sender, sender_set := text_of(scope, "ses_sender")
 	if !sender_set || allow_ses && !sender_valid(sender) || !allow_ses && sender != "" {
+		return .SES_Policy_Invalid
+	}
+	// SES is sent only after the S3 round trip, which needs write access.
+	if allow_ses && !allow_write {
 		return .SES_Policy_Invalid
 	}
 	return .None
@@ -341,8 +346,8 @@ bound_credential_scope :: proc(runner: ^Runner, state, scope: json.Object) -> (b
 		}
 		return scope, .None
 	}
-	policy := read_private(path) or_return
-	digest := file_sha256(path) or_return
+	policy, policy_bytes := read_private_bytes(path) or_return
+	digest := sha256_hex(policy_bytes)
 	if expected_text, is_text := expected.(json.String); !is_text || digest != expected_text {
 		return nil, .Credential_Policy_Changed
 	}
@@ -452,29 +457,39 @@ plan :: proc(runner: ^Runner) -> (result: json.Object, failure: Failure) {
 		return nil, .Verified_SES_Identity_Required
 	}
 	scope_valid(scope) or_return
-	digest := binary_hash(arguments.binary) or_return
 	lock := lock_acquire(arguments.state_dir) or_return
 	defer lock_release(lock)
-	for name in ([]string{"state.json", "scope.json", "credential-policy.json"}) {
-		if path_present(state_file(runner, name)) {
-			return nil, .Run_Already_Exists
-		}
+	// state.json is written last and only ever replaced, never removed: without it
+	// no run started, and leftovers of an interrupted plan are replaced below.
+	if path_present(state_file(runner, "state.json")) {
+		return nil, .Run_Already_Exists
 	}
+	// Only this private copy, made from the bytes that were hashed, is ever run.
+	digest := probe_install(arguments.binary, arguments.state_dir) or_return
 	atomic(arguments.state_dir, "scope.json", scope) or_return
+	_, scope_bytes := read_private_bytes(state_file(runner, "scope.json")) or_return
 	identifier: [16]u8
 	crypto.rand_bytes(identifier[:])
 	state := make(json.Object)
 	state["schema"] = json.Integer(1)
 	state["run_id"] = string(hex.encode(identifier[:]))
 	state["phase"] = "PREPARED"
-	state["scope_sha256"] = file_sha256(state_file(runner, "scope.json")) or_return
-	state["binary"] = arguments.binary
+	state["scope_sha256"] = sha256_hex(scope_bytes)
+	state["binary"] = state_file(runner, PROBE_NAME)
+	state["binary_source"] = arguments.binary
 	state["binary_sha256"] = digest
 	state["allow_ses"] = scope["allow_ses"]
 	state["s3_qualified"] = false
 	if bound {
 		atomic(arguments.state_dir, "credential-policy.json", policy) or_return
-		state["credential_policy_sha256"] = file_sha256(state_file(runner, "credential-policy.json")) or_return
+		_, policy_bytes := read_private_bytes(state_file(runner, "credential-policy.json")) or_return
+		state["credential_policy_sha256"] = sha256_hex(policy_bytes)
+	}
+	if !bound {
+		policy_path := strings.clone_to_cstring(state_file(runner, "credential-policy.json"))
+		if posix.unlink(policy_path) != .OK && posix.errno() != .ENOENT {
+			return nil, .System
+		}
 	}
 	atomic(arguments.state_dir, "state.json", state) or_return
 	return receipt(arguments.state_dir, state)
@@ -657,7 +672,7 @@ environment_credentials :: proc(
 executable_find :: proc(runner: ^Runner, name: string) -> string {
 	search, _ := runner.variable(runner, "PATH")
 	for directory in strings.split(search, ":") {
-		if directory == "" {
+		if directory == "" || !os.is_absolute_path(directory) {
 			continue
 		}
 		candidate := strings.concatenate({directory, "/", name})
@@ -670,6 +685,32 @@ executable_find :: proc(runner: ^Runner, name: string) -> string {
 	return ""
 }
 
+// The real path of the AWS CLI, which receives live credentials: an absolute path
+// to a regular, executable file owned by this user or by root that group and
+// others cannot write. A link (such as Homebrew's) is resolved first, and only the
+// resolved file is checked and executed.
+aws_cli_trusted :: proc(path: string) -> (resolved: string, failure: Failure) {
+	if !os.is_absolute_path(path) {
+		return "", .AWS_CLI_Required
+	}
+	real := posix.realpath(strings.clone_to_cstring(path))
+	if real == nil {
+		return "", .AWS_CLI_Required
+	}
+	resolved = strings.clone_from_cstring(real)
+	posix.free(real)
+	name := strings.clone_to_cstring(resolved)
+	info: posix.stat_t
+	if posix.stat(name, &info) != .OK ||
+	   !posix.S_ISREG(info.st_mode) ||
+	   (info.st_uid != posix.geteuid() && info.st_uid != 0) ||
+	   permission_bits(info.st_mode) & 0o022 != 0 ||
+	   posix.access(name, {.X_OK}) != .OK {
+		return "", .AWS_CLI_Required
+	}
+	return resolved, .None
+}
+
 // Default Credential_Loader: asks the AWS CLI for the credentials and checks the
 // account they belong to before anything native starts.
 credentials :: proc(runner: ^Runner, scope: json.Object, deadline: time.Duration) -> (environment: Environment, failure: Failure) {
@@ -680,6 +721,7 @@ credentials :: proc(runner: ^Runner, scope: json.Object, deadline: time.Duration
 	if executable == "" {
 		return {}, .AWS_CLI_Required
 	}
+	executable = aws_cli_trusted(executable) or_return
 	base := make(map[string]string)
 	for name in ([]string{"PATH", "HOME", "USER", "LOGNAME", "LANG", "LC_ALL", "TMPDIR"}) {
 		if value, found := runner.variable(runner, name); found {
@@ -803,7 +845,11 @@ native :: proc(
 	if !binary_set || !run_set || !scope_set {
 		return nil, .Invalid_Document
 	}
-	if (file_sha256(scope_path) or_return) != scope_digest {
+	if binary != state_file(runner, PROBE_NAME) {
+		return nil, .Run_Binding_Mismatch
+	}
+	_, scope_bytes := read_private_bytes(scope_path) or_return
+	if sha256_hex(scope_bytes) != scope_digest {
 		return nil, .Scope_Changed
 	}
 	if !text_is(state, "binary_sha256", binary_hash(binary) or_return) {
@@ -882,6 +928,7 @@ action :: proc(
 	verb, phase, success: string,
 	environment: Environment,
 	deadline: time.Duration,
+	qualifies_s3 := false,
 ) -> (
 	stopped_with: json.Object,
 	stopped: bool,
@@ -906,6 +953,9 @@ action :: proc(
 		save(runner, state, phase, result) or_return
 		stopped_with = receipt(directory, state^, "NATIVE_ACTION_NOT_VERIFIED") or_return
 		return stopped_with, true, .None
+	}
+	if qualifies_s3 {
+		state["s3_qualified"] = true
 	}
 	save(runner, state, success, result) or_return
 	return nil, false, .None
@@ -940,7 +990,7 @@ run :: proc(runner: ^Runner) -> (result: json.Object, failure: Failure) {
 	}
 	lock := lock_acquire(arguments.state_dir) or_return
 	defer lock_release(lock)
-	scope := read_private(state_file(runner, "scope.json")) or_return
+	scope, scope_bytes := read_private_bytes(state_file(runner, "scope.json")) or_return
 	scope_valid(scope) or_return
 	state := read_private(state_file(runner, "state.json")) or_return
 	binary, binary_set := text_of(state, "binary")
@@ -950,7 +1000,10 @@ run :: proc(runner: ^Runner) -> (result: json.Object, failure: Failure) {
 	if !binary_set || !run_set || !phase_set || !ses_set || "scope_sha256" not_in state || "binary_sha256" not_in state {
 		return nil, .Invalid_Document
 	}
-	if !text_is(state, "scope_sha256", file_sha256(state_file(runner, "scope.json")) or_return) ||
+	if binary != state_file(runner, PROBE_NAME) {
+		return nil, .Run_Binding_Mismatch
+	}
+	if !text_is(state, "scope_sha256", sha256_hex(scope_bytes)) ||
 	   !text_is(state, "binary_sha256", binary_hash(binary) or_return) ||
 	   !hex_valid(run_id, 32) ||
 	   allow_ses != is_true(scope, "allow_ses") {
@@ -998,10 +1051,10 @@ run :: proc(runner: ^Runner) -> (result: json.Object, failure: Failure) {
 		}
 	}
 	if arguments.command != "send" {
-		if stopped_with, stopped := action(runner, &state, "delete", "DELETE_INTENT", "S3_COMPLETE", environment, deadline) or_return; stopped {
+		final := "S3_COMPLETE" if allow_ses else "COMPLETE"
+		if stopped_with, stopped := action(runner, &state, "delete", "DELETE_INTENT", final, environment, deadline, qualifies_s3 = true) or_return; stopped {
 			return stopped_with, .None
 		}
-		s3_complete(runner, &state) or_return
 	}
 	if allow_ses && arguments.command != "cleanup" {
 		if stopped_with, stopped := action(runner, &state, "ses", "SES_INTENT", "COMPLETE", environment, deadline) or_return; stopped {

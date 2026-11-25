@@ -129,6 +129,12 @@ tasks:
       - mkdir -p build
       - '"${ODIN:-odin}" build cmd/qualify -vet -warnings-as-errors -out:build/qualify'
 
+  qualify:probe:
+    desc: Build the live qualification probe into build/probe
+    deps: [tasks]
+    cmds:
+      - build/tasks probe
+
   odin:pin:
     desc: Record the Odin fork commit the suites are tested with
     cmds:

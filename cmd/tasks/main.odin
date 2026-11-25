@@ -48,6 +48,7 @@ COMMANDS := [?]Command {
 		"native-errors [--report FILE]",
 		"Check S3 error handling against an owned TLS peer.",
 	},
+	{"probe", probe_command, "probe", "Build the live qualification probe into build/probe."},
 	{
 		"version",
 		version_command,

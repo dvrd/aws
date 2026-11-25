@@ -170,7 +170,20 @@ region_char_valid :: proc(ch: rune) -> bool {
 // Validating a key that comes from outside is the caller's job, and s3_key_strict
 // is a check a caller can opt into.
 
-// Blocks the calling thread until S3 answers or 15 seconds pass. Not for an
+// The timeout of a PUT or DELETE: 15 s plus 1 s per whole MiB of body, at most
+// Surf's 120 s. A file upload gets 120 s.
+S3_REQUEST_TIMEOUT_MS :: 15000
+S3_REQUEST_TIMEOUT_MAX_MS :: 120000
+
+s3_request_timeout :: proc(body_size: i64, file: bool) -> i64 {
+	if file {
+		return S3_REQUEST_TIMEOUT_MAX_MS
+	}
+	return min(S3_REQUEST_TIMEOUT_MS + (body_size / (1 << 20)) * 1000, S3_REQUEST_TIMEOUT_MAX_MS)
+}
+
+// Blocks the calling thread until S3 answers or its timeout passes: 15 seconds
+// plus 1 second per MiB of body, at most 120 seconds. Not for an
 // event-loop thread: build the request with s3_put_request and send it through
 // the server's own transport instead.
 // now is the signing time; the zero time means time.now().
@@ -306,7 +319,7 @@ s3_object_request_at :: proc(
 			body = body,
 			headers = headers,
 			ca_file = config.ca_file,
-			timeout_ms = 120000 if file != nil else 15000,
+			timeout_ms = s3_request_timeout(i64(len(body)), file != nil),
 			upload_file = file,
 			upload_size = file_size,
 		},

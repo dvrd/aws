@@ -1187,3 +1187,61 @@ request_builders_refuse_a_token_with_a_space :: proc(t: ^testing.T) {
 	_, put_ok := s3_put_request(config, credentials, "key", nil, "text/plain")
 	testing.expect(t, !put_ok)
 }
+
+S3_Timeout_Probe :: struct {
+	timeout_ms: i64,
+	calls:      int,
+}
+
+s3_timeout_probe: S3_Timeout_Probe
+
+s3_timeout_http :: proc(request: HTTP_Request) -> ([]u8, network_client.Buffered_HTTP_Result) {
+	s3_timeout_probe.calls += 1
+	s3_timeout_probe.timeout_ms = request.timeout_ms
+	return nil, {status = 200, ok = true, transport_ok = true}
+}
+
+@(test)
+put_timeout_follows_body_size :: proc(t: ^testing.T) {
+	// The blocking calls report to the process-wide observer, which other tests count.
+	sync.mutex_lock(&aws_test_http_mutex)
+	defer sync.mutex_unlock(&aws_test_http_mutex)
+	config := S3_Config {
+		bucket = "examplebucket",
+		region = "us-east-1",
+	}
+	credentials := AWS_Credentials{"fixture-key", "fixture-secret", ""}
+	sizes := []struct {
+		bytes:   int,
+		timeout: i64,
+	}{{7, 15000}, {1 << 20, 16000}, {64 << 20, 79000}, {200 << 20, 120000}}
+	for size in sizes {
+		body := make([]u8, size.bytes)
+		s3_timeout_probe = {}
+		result := s3_put(config, credentials, "key", body, "text/plain", http_execute = s3_timeout_http)
+		delete(body)
+		testing.expect(t, result.ok && s3_timeout_probe.calls == 1)
+		testing.expect_value(t, s3_timeout_probe.timeout_ms, size.timeout)
+	}
+
+	s3_timeout_probe = {}
+	result := s3_delete(config, credentials, "key", http_execute = s3_timeout_http)
+	testing.expect(t, result.ok && s3_timeout_probe.calls == 1)
+	testing.expect_value(t, s3_timeout_probe.timeout_ms, 15000)
+
+	directory, error := os.make_directory_temp("", "aws-upload-*", context.allocator)
+	if !testing.expect(t, error == nil) {
+		return
+	}
+
+	defer delete(directory)
+	defer os.remove(directory)
+	path := fmt.aprintf("%s/body", directory)
+	defer delete(path)
+	defer os.remove(path)
+	testing.expect(t, os.write_entire_file(path, "payload") == nil)
+	s3_timeout_probe = {}
+	result = s3_put_file(config, credentials, "key", path, "text/plain", http_execute = s3_timeout_http)
+	testing.expect(t, result.ok && s3_timeout_probe.calls == 1)
+	testing.expect_value(t, s3_timeout_probe.timeout_ms, 120000)
+}

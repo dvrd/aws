@@ -22,6 +22,7 @@ ses_operation_uses_injected_http_and_preserves_outcomes :: proc(t: ^testing.T) {
 		t        = t,
 		method   = "POST",
 		url      = "https://email.us-east-1.amazonaws.com/v2/email/outbound-emails",
+		body     = `{"FromEmailAddress":"from@example.test","Destination":{"ToAddresses":["to@example.test"]},"Content":{"Simple":{"Subject":{"Data":"subject","Charset":"UTF-8"},"Body":{"Text":{"Data":"body","Charset":"UTF-8"}}}}}`,
 		status   = 200,
 		response = `{"MessageId":"fixture-message"}`,
 		ok       = true,
@@ -44,7 +45,108 @@ ses_operation_uses_injected_http_and_preserves_outcomes :: proc(t: ^testing.T) {
 	state.status = 0
 	state.ok = false
 	testing.expect_value(t, ses_send(config, credentials, "subject", "body", time.Time{}, aws_test_http), .Unavailable)
-	testing.expect_value(t, state.calls, 4)
+	// SES answered 200 but the body was lost: the message was accepted, so this
+	// must never be reported as Unavailable (which invites a resend).
+	state.status = 200
+	state.ok = false
+	testing.expect_value(t, ses_send(config, credentials, "subject", "body", time.Time{}, aws_test_http), .Invalid_Response)
+	testing.expect_value(t, state.calls, 5)
+
+	ses_validation = {}
+	tokened := AWS_Credentials{"fixture-key", "fixture-secret", "fixture-token"}
+	testing.expect_value(t, ses_send(config, tokened, "subject", "body", time.Time{}, ses_validation_http), .None)
+	testing.expect_value(t, ses_validation.calls, 1)
+	testing.expect_value(t, ses_validation.token, "fixture-token")
+}
+
+SES_Validation :: struct {
+	calls: int,
+	token: string,
+}
+
+// Written only by tests that hold aws_test_http_mutex.
+ses_validation: SES_Validation
+
+ses_validation_http :: proc(request: HTTP_Request) -> ([]u8, network_client.Buffered_HTTP_Result) {
+	ses_validation.calls += 1
+	for line in request.headers {
+		if strings.has_prefix(line, "x-amz-security-token: ") {
+			ses_validation.token = strings.clone(line[len("x-amz-security-token: "):], context.temp_allocator)
+		}
+	}
+	return transmute([]u8)string(`{"MessageId":"m"}`), {status = 200, ok = true, transport_ok = true}
+}
+
+@(test)
+ses_config_and_message_are_checked_before_sending :: proc(t: ^testing.T) {
+	sync.mutex_lock(&aws_test_http_mutex)
+	defer sync.mutex_unlock(&aws_test_http_mutex)
+	context.allocator = context.temp_allocator
+	credentials := AWS_Credentials{"fixture-key", "fixture-secret", ""}
+	good := SES_Config {
+		region    = "us-east-1",
+		sender    = "from@example.test",
+		recipient = "to@example.test",
+	}
+	ses_validation = {}
+
+	configs := [?]SES_Config {
+		{region = "", sender = good.sender, recipient = good.recipient},
+		{region = strings.repeat("a", 33), sender = good.sender, recipient = good.recipient},
+		{region = "us.east.1", sender = good.sender, recipient = good.recipient},
+		{region = good.region, sender = "a@", recipient = good.recipient},
+		{region = good.region, sender = "fromexample.test", recipient = good.recipient},
+		{region = good.region, sender = good.sender, recipient = "to @example.test"},
+		{region = good.region, sender = "<from@example.test", recipient = good.recipient},
+	}
+	for config, index in configs {
+		testing.expect_value(
+			t,
+			ses_send(config, credentials, "subject", "body", time.Time{}, ses_validation_http),
+			SES_Error.Invalid_Config,
+		)
+		testing.expectf(t, ses_validation.calls == 0, "config %d", index)
+	}
+	testing.expect_value(t, ses_send(good, credentials, "subject", "body", time.Time{}, nil), SES_Error.Invalid_Config)
+	testing.expect_value(
+		t,
+		ses_send(good, {}, "subject", "body", time.Time{}, ses_validation_http),
+		SES_Error.Invalid_Config,
+	)
+	testing.expect_value(t, ses_validation.calls, 0)
+
+	long_subject := strings.repeat("s", 201)
+	long_text := strings.repeat("t", 8193)
+	for item in ([]struct {
+			subject, text: string,
+		} {
+			{"", "body"},
+			{long_subject, "body"},
+			{"sub\rject", "body"},
+			{"subject", ""},
+			{"subject", long_text},
+		}) {
+		testing.expect_value(
+			t,
+			ses_send(good, credentials, item.subject, item.text, time.Time{}, ses_validation_http),
+			SES_Error.Invalid_Message,
+		)
+	}
+	testing.expect_value(t, ses_validation.calls, 0)
+
+	testing.expect_value(
+		t,
+		ses_send(
+			good,
+			credentials,
+			strings.repeat("s", 200),
+			strings.repeat("t", 8192),
+			time.Time{},
+			ses_validation_http,
+		),
+		SES_Error.None,
+	)
+	testing.expect_value(t, ses_validation.calls, 1)
 }
 
 @(test)

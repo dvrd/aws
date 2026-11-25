@@ -82,7 +82,7 @@ ses_probe :: proc(
 		ses_capture,
 	)
 	if capture.called {
-		result.ses_effect = effect_of(capture.result)
+		result.ses_effect = effect_of_transport(capture.result)
 	}
 	result.mutation_status = capture.result.status
 	result.ok = result.ses_kind == .None
@@ -148,12 +148,23 @@ object_read :: proc(
 	return result
 }
 
-effect_of :: proc(value: aws.S3_Result) -> surf.HTTP_Write_Effect {
+effect_of_transport :: proc(value: surf.Buffered_HTTP_Result) -> surf.HTTP_Write_Effect {
 	if value.status != 0 {
 		return .Response_Received
 	}
 
 	return value.error.write_effect
+}
+
+effect_of :: proc(value: aws.S3_Result) -> surf.HTTP_Write_Effect {
+	switch value.effect {
+	case .Not_Sent:
+		return .Not_Sent
+	case .Response_Received:
+		return .Response_Received
+	case .Unknown:
+	}
+	return .Unknown
 }
 
 object_put :: proc(

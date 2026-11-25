@@ -50,7 +50,7 @@ metadata :: proc(request: aws.HTTP_Request) -> ([]u8, surf.Buffered_HTTP_Result)
 		}
 	}
 	return transmute([]u8)string(
-		`{"AccessKeyId":"fixture-key","SecretAccessKey":"fixture-secret","Token":"fixture-session"}`,
+		`{"Code":"Success","AccessKeyId":"fixture-key","SecretAccessKey":"fixture-secret","Token":"fixture-session","Expiration":"2099-01-01T00:00:00Z"}`,
 	), {status = 200, ok = true, transport_ok = true}
 }
 

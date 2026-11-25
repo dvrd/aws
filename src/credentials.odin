@@ -172,6 +172,10 @@ CREDENTIAL_ACCESS_MAX :: 128
 CREDENTIAL_SECRET_MAX :: 256
 CREDENTIAL_TOKEN_MAX :: 8192
 CREDENTIAL_ROLE_MAX :: 128
+// Temp memory one resolution may use: a 64 KiB profile, three metadata replies
+// of up to 64 KiB, and the decoded document, with room to spare. Zeroed in full
+// and freed before the refresh returns.
+CREDENTIAL_SCRATCH_BYTES :: 1 << 20
 CREDENTIAL_IMDS_TOKEN_MAX :: 4096
 CREDENTIAL_RELATIVE_MAX :: 1024
 
@@ -385,7 +389,21 @@ credential_refresh_run :: proc(cache: ^Credential_Cache) -> (target: u64) {
 	resolver := credential_resolver_of(cache)
 	sync.mutex_unlock(&cache.mutex)
 
-	snap, resolve_error := credential_resolve(resolver)
+	scratch, scratch_error := make([]byte, CREDENTIAL_SCRATCH_BYTES, resolver.allocator)
+	snap: ^Credential_Snapshot
+	resolve_error: Credential_Error
+	if scratch_error != nil {
+		resolve_error = {kind = .Allocation_Failed}
+	} else {
+		arena: mem.Arena
+		mem.arena_init(&arena, scratch)
+		{
+			context.temp_allocator = mem.arena_allocator(&arena)
+			snap, resolve_error = credential_resolve(resolver)
+		}
+		mem.zero_explicit(raw_data(scratch), len(scratch))
+		delete(scratch, resolver.allocator)
+	}
 	now := cache.clock(cache.clock_data)
 
 	sync.mutex_lock(&cache.mutex)

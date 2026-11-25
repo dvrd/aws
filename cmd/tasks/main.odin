@@ -22,9 +22,10 @@ COMMANDS := [?]Command {
 	{
 		"test",
 		test_command,
-		"test [--shared DIR] [--package PATH] [--internal-only] [-- Odin flags]",
+		"test [--shared DIR] [--package DIR] [-- Odin flags]",
 		"Stage the checkout and run the Odin test suites.",
 	},
+	{"layout", layout_command, "layout", "Check that every source file has a unit test file of the same name."},
 	{"signatures", signatures_command, "signatures", "Recalculate the SigV4 fixtures with OpenSSL."},
 	{"consumer", consumer_command, "consumer", "Build and run a consumer that vendors the library."},
 	{
@@ -88,24 +89,31 @@ main :: proc() {
 	os.exit(64)
 }
 
-// Everything offline, in the order a failure is cheapest to find.
+// Everything offline, in the order a failure is cheapest to find. Each step is a
+// command of COMMANDS.
+CHECK_STEPS :: []string{"build", "test", "signatures", "consumer", "credentials", "loopback", "native-errors"}
+
 check_command :: proc(arguments: []string) -> int {
-	steps := []Command {
-		{name = "build", run = build_command},
-		{name = "test", run = test_command},
-		{name = "signatures", run = signatures_command},
-		{name = "consumer", run = consumer_command},
-		{name = "credentials", run = credentials_command},
-		{name = "loopback", run = loopback_command},
-		{name = "native-errors", run = native_errors_command},
-	}
-	for step in steps {
-		if code := step.run(nil); code != 0 {
-			fmt.eprintf("tasks: %s failed\n", step.name)
+	for step in CHECK_STEPS {
+		command, found := command_find(step)
+		if !found {
+			return fail("check has no step %s", step)
+		}
+		if code := command.run(nil); code != 0 {
+			fmt.eprintf("tasks: %s failed\n", step)
 			return code
 		}
 	}
 	return 0
+}
+
+command_find :: proc(name: string) -> (Command, bool) {
+	for command in COMMANDS {
+		if command.name == name {
+			return command, true
+		}
+	}
+	return {}, false
 }
 
 build_command :: proc(arguments: []string) -> int {

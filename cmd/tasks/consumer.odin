@@ -3,6 +3,9 @@ package main
 import "core:fmt"
 import "core:os"
 
+// The library and every dependency recorded in .krs/packages.json.
+CONSUMER_LIBRARIES :: []string{"aws", "surf", "websocket", "async"}
+
 CONSUMER_SOURCE :: `package main
 import aws "shared:aws"
 main :: proc() {
@@ -21,7 +24,7 @@ consumer_command :: proc(arguments: []string) -> int {
 		return fail("cannot create a work directory")
 	}
 	defer os.remove_all(work)
-	for name in ([]string{"aws", "surf", "websocket", "async"}) {
+	for name in CONSUMER_LIBRARIES {
 		source := fmt.aprintf("%s/%s", shared_source(), name)
 		if name == "aws" {
 			source = fmt.aprintf("%s/src", root_directory())

@@ -4,6 +4,8 @@ import "core:fmt"
 import "core:os"
 import "core:time"
 
+CREDENTIALS_FIXTURE :: "tests/e2e/credentials/fixture"
+
 CREDENTIAL_FIXTURES :: []string {
 	"environment",
 	"profile",
@@ -52,7 +54,7 @@ credentials_command :: proc(arguments: []string) -> int {
 		{
 			compiler(),
 			"build",
-			"tests/testdata/credentials",
+			CREDENTIALS_FIXTURE,
 			fmt.aprintf("-collection:shared=%s", shared),
 			"-sanitize:address",
 			"-warnings-as-errors",

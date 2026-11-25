@@ -5,7 +5,8 @@ import "core:sys/posix"
 import "core:testing"
 import "core:time"
 
-// Real owned children only: short shell fixtures, no CLI, probe or network.
+// Unit tests of cmd/qualify/process.odin. Real owned children only: short shell
+// fixtures, no CLI, probe or network.
 child_fixture :: proc(test: ^Test, script: string) -> string {
 	fixture(test)
 	path := strings.concatenate({test.root, "/child"})

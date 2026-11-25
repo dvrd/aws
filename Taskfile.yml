@@ -12,7 +12,6 @@ tasks:
     aliases: [default]
     deps: [tasks]
     cmds:
-      - task: test:tasks
       - build/tasks check
 
   build:
@@ -24,19 +23,27 @@ tasks:
   test:
     desc: Stage the checkout and run the Odin test suites
     summary: |
-      task test
-      task test -- --package . --internal-only
-      task test -- --package live_qualification/runner
-      task test -- -- -define:ODIN_TEST_NAMES=aws.sigv4_matches_independent_fixture
+      Runs every directory under tests/ that holds a *_test.odin file, after checking
+      that every source file in src/ and cmd/<name>/ has a unit test file of the same
+      name in tests/unit/ and tests/unit/<name>/.
+
+        tests/unit/           one <file>_test.odin per source file
+        tests/integration/    a program end to end through real files and processes
+        tests/conformance/    agreement with an independent implementation
+        tests/fuzz/           generated inputs against every parser and check
+        tests/stress/         concurrency under load
+        tests/e2e/            programs the e2e tasks build and run (test:loopback, ...)
+        tests/qualification/  the probes used against real AWS, and their own tests
+        tests/support/<name>/ helpers compiled into every suite of that package
+
+      --package names a directory under tests/ and runs it with everything below:
+
+        task test -- --package unit
+        task test -- --package unit/tasks
+        task test -- -- -define:ODIN_TEST_NAMES=aws.sigv4_matches_independent_fixture
     deps: [tasks]
     cmds:
       - build/tasks test {{.CLI_ARGS}}
-
-  test:tasks:
-    desc: Run the unit tests of the task runner itself
-    cmds:
-      - mkdir -p build
-      - '"${ODIN:-odin}" test cmd/tasks -vet -warnings-as-errors -out:build/tasks-tests'
 
   test:signatures:
     desc: Recalculate the SigV4 fixtures with OpenSSL
@@ -91,12 +98,12 @@ tasks:
   qualify:build:
     internal: true
     sources:
-      - tests/live_qualification/runner/*.odin
+      - cmd/qualify/*.odin
     generates:
       - build/qualify
     cmds:
       - mkdir -p build
-      - '"${ODIN:-odin}" build tests/live_qualification/runner -vet -warnings-as-errors -out:build/qualify'
+      - '"${ODIN:-odin}" build cmd/qualify -vet -warnings-as-errors -out:build/qualify'
 
   version:
     desc: Show the last released version and the one the next release would get

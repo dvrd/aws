@@ -3,7 +3,10 @@ package main
 import "core:fmt"
 import "core:os"
 
-// Builds the S3 error probe and its TLS 1.3 peer (tests/native_errors), then runs
+NATIVE_ERRORS_PROBE :: "tests/e2e/native_errors/probe"
+NATIVE_ERRORS_PEER :: "tests/e2e/native_errors/peer"
+
+// Builds the S3 error probe and its TLS 1.3 peer (tests/e2e/native_errors), then runs
 // the peer's 13 response, trust and wrong-status cases over loopback.
 native_errors_command :: proc(arguments: []string) -> int {
 	work, created := work_directory("native-errors")
@@ -19,8 +22,8 @@ native_errors_command :: proc(arguments: []string) -> int {
 	probe := fmt.aprintf("%s/probe", work)
 	driver := fmt.aprintf("%s/driver", work)
 	builds := [][]string {
-		{"tests/testdata/native_error_loopback", fmt.aprintf("-collection:shared=%s", shared), fmt.aprintf("-out:%s", probe)},
-		{"tests/native_errors", fmt.aprintf("-out:%s", driver)},
+		{NATIVE_ERRORS_PROBE, fmt.aprintf("-collection:shared=%s", shared), fmt.aprintf("-out:%s", probe)},
+		{NATIVE_ERRORS_PEER, fmt.aprintf("-collection:shared=%s", shared), fmt.aprintf("-out:%s", driver)},
 	}
 	for build in builds {
 		command := make([dynamic]string)

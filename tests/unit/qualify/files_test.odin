@@ -108,3 +108,48 @@ probe_digest_needs_an_absolute_executable_nobody_else_can_write :: proc(t: ^test
 	testing.expect_value(t, writable, Failure.Executable_Required)
 	testing.expect_value(t, len(sha256_hex(nil)), 64)
 }
+
+@(test)
+probe_install_copies_the_hashed_bytes :: proc(t: ^testing.T) {
+	test: Test
+	context.allocator = test_begin(&test, t)
+	defer test_end(&test)
+	fixture(&test)
+	directory := strings.concatenate({test.root, "/private"})
+	testing.expect(t, posix.mkdir(strings.clone_to_cstring(directory), posix.S_IRWXU) == .OK)
+	source := test.runner.arguments.binary
+	copy := strings.concatenate({directory, "/", PROBE_NAME})
+	digest, failure := probe_install(source, directory)
+	testing.expect_value(t, failure, Failure.None)
+	testing.expect_value(t, digest, sha256_hex(transmute([]u8)read_text(source)))
+	testing.expect_value(t, read_text(copy), read_text(source))
+	info: posix.stat_t
+	testing.expect(t, posix.lstat(strings.clone_to_cstring(copy), &info) == .OK)
+	testing.expect(t, posix.S_ISREG(info.st_mode))
+	testing.expect_value(t, permission_bits(info.st_mode), 0o700)
+
+	// A second install replaces the earlier copy.
+	write_file(source, "#!/bin/sh\nexit 2\n", posix.S_IRWXU)
+	again, replaced := probe_install(source, directory)
+	testing.expect_value(t, replaced, Failure.None)
+	testing.expect_value(t, again, sha256_hex(transmute([]u8)read_text(source)))
+	testing.expect(t, again != digest)
+	testing.expect_value(t, read_text(copy), read_text(source))
+
+	// A linked source is never followed.
+	link := strings.concatenate({test.root, "/probe-link"})
+	testing.expect(t, posix.symlink(strings.clone_to_cstring(source), strings.clone_to_cstring(link)) == .OK)
+	_, linked := probe_install(link, directory)
+	testing.expect(t, linked != .None)
+	_, relative := probe_install("probe", directory)
+	testing.expect_value(t, relative, Failure.Absolute_Binary_Required)
+
+	// A link in place of the copy is neither followed nor replaced.
+	target := strings.concatenate({test.root, "/target"})
+	write_file(target, "untouched")
+	testing.expect(t, posix.unlink(strings.clone_to_cstring(copy)) == .OK)
+	testing.expect(t, posix.symlink(strings.clone_to_cstring(target), strings.clone_to_cstring(copy)) == .OK)
+	_, planted := probe_install(source, directory)
+	testing.expect_value(t, planted, Failure.System)
+	testing.expect_value(t, read_text(target), "untouched")
+}

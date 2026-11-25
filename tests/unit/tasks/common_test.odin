@@ -20,6 +20,41 @@ option_values_are_bounded :: proc(t: ^testing.T) {
 }
 
 @(test)
+clang_majors_are_read_from_version_text :: proc(t: ^testing.T) {
+	testing.expect_value(t, clang_major("Apple clang version 21.0.0 (clang-2100.4.1.1)\nTarget: ..."), "21")
+	testing.expect_value(t, clang_major("Homebrew clang version 22.1.8\n"), "22")
+	testing.expect_value(t, clang_major("gcc (GCC) 14"), "")
+}
+
+@(test)
+the_sanitizer_clang_is_explicit_then_versioned_then_system :: proc(t: ^testing.T) {
+	context.allocator = context.temp_allocator
+	exists :: proc(path: string) -> bool {
+		return path == "first" || path == "second"
+	}
+	installed := []string{"missing", "first", "second"}
+	missing := []string{"missing"}
+	for example in ([]struct {
+		explicit, backend, system: string,
+		candidates: []string,
+		path: string,
+		ok: bool,
+		message: string,
+	}{
+		{"custom", "22", "21", installed, "custom", true, ""},
+		{"", "", "21", installed, "", true, ""},
+		{"", "22", "22", installed, "first", true, ""},
+		{"", "22", "22", missing, "", true, ""},
+		{"", "22", "21", missing, "", false, "need clang 22: install llvm@22 or set ODIN_CLANG_PATH"},
+	}) {
+		path, ok, message := sanitizer_clang_choose(example.explicit, example.backend, example.system, example.candidates, exists)
+		testing.expect_value(t, path, example.path)
+		testing.expect_value(t, ok, example.ok)
+		testing.expect_value(t, message, example.message)
+	}
+}
+
+@(test)
 trees_are_copied_without_hidden_files :: proc(t: ^testing.T) {
 	context.allocator = context.temp_allocator
 	work, created := work_directory("tasks-copy")

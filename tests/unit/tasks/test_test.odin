@@ -132,3 +132,14 @@ a_compiled_suite_holds_its_package_support_and_tests :: proc(t: ^testing.T) {
 	_, clashing := suite_stage(root, fmt.aprintf("%s/out/clash", root), homes[0], {relative = "tests/clash"})
 	testing.expect(t, !clashing, "a test file may not replace a source file")
 }
+
+@(test)
+suites_fail_on_bad_memory_unless_the_user_decides :: proc(t: ^testing.T) {
+	context.allocator = context.temp_allocator
+	flags := strings.join(suite_flags({}, "/shared", "/out/tests"), " ")
+	testing.expect(t, strings.contains(flags, SUITE_MEMORY_FLAG), flags)
+	testing.expect(t, strings.contains(flags, "-out:/out/tests"), flags)
+	mine := strings.join(suite_flags({"-define:ODIN_TEST_FAIL_ON_BAD_MEMORY=false", "-out:x"}, "/shared", "/out/tests"), " ")
+	testing.expect(t, !strings.contains(mine, SUITE_MEMORY_FLAG), mine)
+	testing.expect(t, !strings.contains(mine, "-out:/out/tests"), mine)
+}

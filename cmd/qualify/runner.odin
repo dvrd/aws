@@ -582,7 +582,7 @@ temporary_environment :: proc(
 		if !characters_valid(value, 1, item.bound, is_printable) {
 			return nil, {}, .Temporary_Credentials_Required
 		}
-		variables[item.name] = value
+		variables[item.name] = strings.clone(value)
 	}
 	expiration, expiration_set := runner.variable(runner, "AWS_CREDENTIAL_EXPIRATION")
 	parsed := false
@@ -784,7 +784,7 @@ credentials :: proc(runner: ^Runner, scope: json.Object, deadline: time.Duration
 			}
 		}
 		if text != "" {
-			variables[item.name] = text
+			variables[item.name] = strings.clone(text)
 		}
 	}
 	if "AWS_ACCESS_KEY_ID" not_in variables || "AWS_SECRET_ACCESS_KEY" not_in variables {

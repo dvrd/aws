@@ -6,6 +6,7 @@ import "core:mem"
 import "core:os"
 import "core:strings"
 import "core:sync"
+import "core:thread"
 import "core:time"
 import "shared:surf"
 
@@ -16,13 +17,31 @@ import "shared:surf"
 // returns the secret in strings that stay in context.temp_allocator, unwiped,
 // until the caller resets it.
 //
-// A server uses a Credential_Cache: credential_cache_init once at startup, then
-// credential_refresh from a maintenance thread or timer, and credential_lease_cached
-// with credential_lease_release around each signing in a request handler. The
-// cache keeps one copy of the secret, wipes it when it is replaced and no lease
-// holds it, and hands out leases without I/O.
+// A server uses a Credential_Cache: credential_cache_init once at startup with
+// credential_clock_wall, a Credential_Refresher (credential_refresher_start) that
+// calls credential_refresh from its own thread, and credential_lease_cached with
+// credential_lease_release around each signing in a request handler, passing
+// credential_lease_credentials(lease) to the signer. The cache keeps one copy of
+// the secret, wipes it when it is replaced and no lease holds it, and hands out
+// leases without I/O.
+//
+//   cache: aws.Credential_Cache
+//   aws.credential_cache_init(&cache, aws.http_execute_default, aws.credential_clock_wall)
+//   refresher: aws.Credential_Refresher
+//   aws.credential_refresher_start(&refresher, &cache)
+//
+//   // in a request handler:
+//   lease, error := aws.credential_lease_cached(&cache)
+//   if error.kind != .None { /* 503: credentials not ready */ }
+//   defer aws.credential_lease_release(&cache, &lease)
+//   result := aws.s3_put(config, aws.credential_lease_credentials(lease), key, body, type)
+//
+//   // at shutdown, after handlers stop:
+//   aws.credential_refresher_stop(&refresher)
+//   aws.credential_cache_destroy(&cache)
 //
 //   credential_lease_cached   request handler: never blocks, never does I/O
+//   credential_refresher_*    startup and shutdown: one thread runs credential_refresh
 //   credential_refresh        maintenance only: blocks for the provider's calls
 //   credential_lease          startup or a worker: blocks when a refresh is needed
 //   aws_credentials           scripts only
@@ -48,7 +67,7 @@ aws_credentials_with_http :: proc(
 	snap, failure := credential_resolve(
 		{
 			execute = http_execute,
-			clock = credential_clock_now,
+			clock = credential_clock_wall,
 			modes = CREDENTIAL_MODES_SUPPORTED,
 			allocator = context.allocator,
 		},
@@ -84,8 +103,9 @@ aws_credentials_valid :: proc(value: AWS_Credentials) -> bool {
 
 Credential_Clock :: proc(data: rawptr) -> time.Time
 
-@(private)
-credential_clock_now :: proc(data: rawptr) -> time.Time {
+// The real time, for a Credential_Cache outside tests: credential_cache_init(&cache,
+// http_execute_default, credential_clock_wall).
+credential_clock_wall :: proc(_: rawptr) -> time.Time {
 	return time.now()
 }
 
@@ -576,6 +596,137 @@ credential_lease_release :: proc(cache: ^Credential_Cache, lease: ^Credential_Le
 	if snap.retired && snap.readers == 0 {
 		credential_snapshot_erase(cache, snap)
 	}
+}
+
+// The lease's credentials in the shape every signer takes. They BORROW the
+// lease: valid only until credential_lease_release(cache, &lease). Sign with
+// them, then release; never store them, put them in a struct that outlives the
+// release, or hand them to another thread. A zero lease gives zero credentials,
+// which every signer refuses.
+credential_lease_credentials :: proc(lease: Credential_Lease) -> AWS_Credentials {
+	return {lease.access_key, lease.secret_key, lease.session_token}
+}
+
+// Keeps a Credential_Cache fresh from its own thread: credential_refresh at
+// start, then every interval, until credential_refresher_stop. interval must be
+// positive and shorter than margin, so credentials are replaced before they
+// enter the skew. The cache must outlive the refresher; stop it before
+// credential_cache_destroy (destroy returns Busy while a refresh runs).
+Credential_Refresher :: struct {
+	cache:    ^Credential_Cache,
+	interval: time.Duration,
+	margin:   time.Duration,
+	thread:   ^thread.Thread,
+	mutex:    sync.Mutex,
+	cond:     sync.Cond,
+	stopping: bool, // guarded by mutex
+	attempts: int, // guarded by mutex
+	last:     Credential_Error, // guarded by mutex; the latest refresh result
+}
+
+// How often a Credential_Refresher calls credential_refresh by default; well
+// inside CREDENTIAL_REFRESH_MARGIN.
+CREDENTIAL_REFRESH_INTERVAL :: time.Minute
+
+// Starts the refresher's thread, which refreshes at once and then every
+// interval. Does not block: the first refresh runs on the new thread, so a
+// caller that needs credentials before serving polls credential_lease_cached or
+// uses credential_lease. Call it from the thread that owns the refresher, once;
+// it returns Invalid_Argument for a nil refresher or cache, a refresher already
+// started, interval <= 0, margin < 0 or interval >= margin, and
+// Allocation_Failed when the thread cannot be created.
+credential_refresher_start :: proc(
+	refresher: ^Credential_Refresher,
+	cache: ^Credential_Cache,
+	interval: time.Duration = CREDENTIAL_REFRESH_INTERVAL,
+	margin: time.Duration = CREDENTIAL_REFRESH_MARGIN,
+) -> Credential_Error {
+	if refresher == nil ||
+	   cache == nil ||
+	   refresher.thread != nil ||
+	   interval <= 0 ||
+	   margin < 0 ||
+	   interval >= margin {
+		return {kind = .Invalid_Argument}
+	}
+	refresher.cache = cache
+	refresher.interval = interval
+	refresher.margin = margin
+	refresher.stopping = false
+	refresher.attempts = 0
+	refresher.last = {}
+	refresher.thread = thread.create_and_start_with_data(refresher, credential_refresher_run)
+	if refresher.thread == nil {
+		return {kind = .Allocation_Failed}
+	}
+	return {}
+}
+
+// The refresher's thread. It ends when stop is requested, or after the cache
+// reports Closed (destroyed under it).
+@(private)
+credential_refresher_run :: proc(data: rawptr) {
+	refresher := cast(^Credential_Refresher)data
+	for {
+		error := credential_refresh(refresher.cache, refresher.margin)
+		// The refresh's temp allocations end here, so a long-lived thread does not grow its temp allocator.
+		free_all(context.temp_allocator)
+
+		sync.mutex_lock(&refresher.mutex)
+		refresher.attempts += 1
+		refresher.last = error
+		if error.kind == .Closed {
+			sync.mutex_unlock(&refresher.mutex)
+			return
+		}
+		// Cond waits can wake early or spuriously; wait until the deadline or a stop.
+		deadline := time.tick_add(time.tick_now(), refresher.interval)
+		for !refresher.stopping {
+			remaining := time.tick_diff(time.tick_now(), deadline)
+			if remaining <= 0 {
+				break
+			}
+			sync.cond_wait_with_timeout(&refresher.cond, &refresher.mutex, remaining)
+		}
+		stopping := refresher.stopping
+		sync.mutex_unlock(&refresher.mutex)
+		if stopping {
+			return
+		}
+	}
+}
+
+// Stops and joins the thread. Waits at most for one refresh already in progress
+// (the provider's calls, up to 4.5 s). Safe to call on a refresher never started.
+// Call it from the thread that started the refresher, or from one other thread
+// at a time; afterwards the refresher may be started again.
+credential_refresher_stop :: proc(refresher: ^Credential_Refresher) {
+	if refresher == nil || refresher.thread == nil {
+		return
+	}
+	sync.mutex_lock(&refresher.mutex)
+	refresher.stopping = true
+	sync.cond_broadcast(&refresher.cond)
+	sync.mutex_unlock(&refresher.mutex)
+	thread.join(refresher.thread)
+	thread.destroy(refresher.thread)
+	refresher.thread = nil
+}
+
+// The number of refreshes run and the latest result, for health checks. Does
+// not block beyond the refresher's mutex; any thread may call it.
+credential_refresher_status :: proc(
+	refresher: ^Credential_Refresher,
+) -> (
+	attempts: int,
+	last: Credential_Error,
+) {
+	if refresher == nil {
+		return 0, {kind = .Invalid_Argument}
+	}
+	sync.mutex_lock(&refresher.mutex)
+	defer sync.mutex_unlock(&refresher.mutex)
+	return refresher.attempts, refresher.last
 }
 
 credential_cancelled :: proc(cancel: ^Credential_Cancel) -> bool {

@@ -1899,3 +1899,251 @@ credential_snapshot_allocation_failures_leave_nothing_behind :: proc(t: ^testing
 	testing.expect(t, !probe.visible, "the erased snapshot was wiped")
 	testing.expect(t, probe.frees > 0, "the storage was released")
 }
+
+@(test)
+credential_clock_wall_reads_the_real_time :: proc(t: ^testing.T) {
+	saved := credential_test_env_push()
+	defer credential_test_env_pop(saved)
+	wall := credential_clock_wall(nil)
+	gap := time.diff(wall, time.now())
+	testing.expect(t, gap > -time.Second && gap < time.Second, "the wall clock is within a second of time.now")
+}
+
+@(test)
+lease_credentials_borrow_the_lease :: proc(t: ^testing.T) {
+	saved := credential_test_env_push()
+	defer credential_test_env_pop(saved)
+	directory, directory_error := os.make_directory_temp("", "aws-lease-credentials-*", context.allocator)
+	testing.expect(t, directory_error == nil)
+	defer delete(directory)
+	defer os.remove(directory)
+	credential_test_absent(directory)
+	testing.expect(t, os.set_env("AWS_CONTAINER_CREDENTIALS_RELATIVE_URI", "/v2/credentials/fixture") == nil)
+	clock := Credential_Test_Clock {
+		now = time.time_add(credential_test_instant("2024-01-01T00:00:00Z"), -time.Hour),
+	}
+	http := Credential_Test_HTTP {
+		body = CREDENTIAL_TEST_OLD,
+	}
+	credential_test_http_state = &http
+	defer credential_test_http_state = nil
+	cache: Credential_Cache
+	testing.expect_value(t, credential_test_cache(&cache, &clock).kind, .None)
+	testing.expect_value(t, credential_refresh(&cache).kind, Credential_Error_Kind.None)
+	lease, lease_error := credential_lease_cached(&cache)
+	testing.expect_value(t, lease_error.kind, Credential_Error_Kind.None)
+	credentials := credential_lease_credentials(lease)
+	testing.expect_value(t, credentials, AWS_Credentials{"old-key", "old-secret", "old-token"})
+
+	// A borrow of the lease's storage, not a copy.
+	testing.expect(t, raw_data(credentials.access_key) == raw_data(lease.access_key))
+	testing.expect(t, raw_data(credentials.secret_key) == raw_data(lease.secret_key))
+	testing.expect(t, raw_data(credentials.session_token) == raw_data(lease.session_token))
+	credential_lease_release(&cache, &lease)
+
+	// A zero lease (release clears it) gives credentials every signer refuses.
+	zero := credential_lease_credentials(lease)
+	testing.expect_value(t, zero, AWS_Credentials{})
+	testing.expect(t, !aws_credentials_valid(zero))
+	testing.expect_value(t, credential_lease_credentials(Credential_Lease{}), AWS_Credentials{})
+	testing.expect_value(t, credential_cache_destroy(&cache).kind, Credential_Error_Kind.None)
+}
+
+credential_test_lease_ready :: proc() -> bool {
+	cache := credential_test_cache_state
+	lease, error := credential_lease_cached(cache)
+
+	if error.kind != .None {
+		return false
+	}
+
+	credential_lease_release(cache, &lease)
+
+	return true
+}
+
+@(test)
+refresher_fills_the_cache_and_stops_promptly :: proc(t: ^testing.T) {
+	saved := credential_test_env_push()
+	defer credential_test_env_pop(saved)
+	directory, directory_error := os.make_directory_temp("", "aws-refresher-*", context.allocator)
+	testing.expect(t, directory_error == nil)
+	defer delete(directory)
+	defer os.remove(directory)
+	credential_test_absent(directory)
+	testing.expect(t, os.set_env("AWS_CONTAINER_CREDENTIALS_RELATIVE_URI", "/v2/credentials/fixture") == nil)
+	clock := Credential_Test_Clock {
+		now = time.time_add(credential_test_instant("2024-01-01T00:00:00Z"), -time.Hour),
+	}
+	http := Credential_Test_HTTP {
+		body = CREDENTIAL_TEST_OLD,
+	}
+	credential_test_http_state = &http
+	defer credential_test_http_state = nil
+	cache: Credential_Cache
+	testing.expect_value(t, credential_test_cache(&cache, &clock).kind, .None)
+	credential_test_cache_state = &cache
+	defer credential_test_cache_state = nil
+
+	refresher: Credential_Refresher
+	started := credential_refresher_start(&refresher, &cache, 20 * time.Millisecond, time.Minute)
+	testing.expect_value(t, started.kind, Credential_Error_Kind.None)
+	testing.expect(t, credential_test_wait_until(credential_test_lease_ready), "the refresher filled the cache")
+
+	before := time.tick_now()
+	credential_refresher_stop(&refresher)
+	testing.expect(t, time.tick_since(before) < time.Second, "stop returns promptly")
+	testing.expect(t, refresher.thread == nil)
+
+	attempts, last := credential_refresher_status(&refresher)
+	testing.expect(t, attempts >= 1)
+	testing.expect_value(t, last.kind, Credential_Error_Kind.None)
+
+	// The thread is joined: no refresh runs after stop.
+	calls := http.calls
+	testing.expect(t, calls >= 1)
+	time.sleep(100 * time.Millisecond)
+	testing.expect_value(t, http.calls, calls)
+	testing.expect(t, http.rejected == "")
+	testing.expect_value(t, credential_cache_destroy(&cache).kind, Credential_Error_Kind.None)
+}
+
+@(test)
+refresher_rejects_bad_arguments :: proc(t: ^testing.T) {
+	saved := credential_test_env_push()
+	defer credential_test_env_pop(saved)
+	directory, directory_error := os.make_directory_temp("", "aws-refresher-arguments-*", context.allocator)
+	testing.expect(t, directory_error == nil)
+	defer delete(directory)
+	defer os.remove(directory)
+	credential_test_absent(directory)
+	testing.expect(t, os.set_env("AWS_CONTAINER_CREDENTIALS_RELATIVE_URI", "/v2/credentials/fixture") == nil)
+	clock := Credential_Test_Clock {
+		now = time.time_add(credential_test_instant("2024-01-01T00:00:00Z"), -time.Hour),
+	}
+	http := Credential_Test_HTTP {
+		body = CREDENTIAL_TEST_OLD,
+	}
+	credential_test_http_state = &http
+	defer credential_test_http_state = nil
+	cache: Credential_Cache
+	testing.expect_value(t, credential_test_cache(&cache, &clock).kind, .None)
+
+	// A refresher never started: stop returns at once.
+	idle: Credential_Refresher
+	before := time.tick_now()
+	credential_refresher_stop(&idle)
+	credential_refresher_stop(nil)
+	testing.expect(t, time.tick_since(before) < time.Second)
+
+	refresher: Credential_Refresher
+	testing.expect_value(t, credential_refresher_start(nil, &cache).kind, Credential_Error_Kind.Invalid_Argument)
+	testing.expect_value(t, credential_refresher_start(&refresher, nil).kind, Credential_Error_Kind.Invalid_Argument)
+	testing.expect_value(
+		t,
+		credential_refresher_start(&refresher, &cache, 0).kind,
+		Credential_Error_Kind.Invalid_Argument,
+	)
+	testing.expect_value(
+		t,
+		credential_refresher_start(&refresher, &cache, -time.Second).kind,
+		Credential_Error_Kind.Invalid_Argument,
+	)
+	testing.expect_value(
+		t,
+		credential_refresher_start(&refresher, &cache, time.Minute, time.Minute).kind,
+		Credential_Error_Kind.Invalid_Argument,
+	)
+	testing.expect_value(
+		t,
+		credential_refresher_start(&refresher, &cache, time.Second, -time.Second).kind,
+		Credential_Error_Kind.Invalid_Argument,
+	)
+	testing.expect(t, refresher.thread == nil, "a rejected start creates no thread")
+
+	// Starting twice is refused and leaves the running thread alone.
+	testing.expect_value(
+		t,
+		credential_refresher_start(&refresher, &cache, 20 * time.Millisecond, time.Minute).kind,
+		Credential_Error_Kind.None,
+	)
+	running := refresher.thread
+	testing.expect_value(
+		t,
+		credential_refresher_start(&refresher, &cache, 20 * time.Millisecond, time.Minute).kind,
+		Credential_Error_Kind.Invalid_Argument,
+	)
+	testing.expect(t, refresher.thread == running)
+	credential_refresher_stop(&refresher)
+	testing.expect(t, refresher.thread == nil)
+	testing.expect_value(t, credential_cache_destroy(&cache).kind, Credential_Error_Kind.None)
+}
+
+// The thread stopping a refresher in refresher_stops_while_a_refresh_is_blocked,
+// kept here because credential_test_wait_until's predicate takes no arguments.
+credential_test_stopper: ^thread.Thread
+
+credential_test_stopper_done :: proc() -> bool {
+	return thread.is_done(credential_test_stopper)
+}
+
+credential_test_stop_refresher :: proc(data: rawptr) {
+	credential_refresher_stop(cast(^Credential_Refresher)data)
+}
+
+@(test)
+refresher_stops_while_a_refresh_is_blocked :: proc(t: ^testing.T) {
+	saved := credential_test_env_push()
+	defer credential_test_env_pop(saved)
+	directory, directory_error := os.make_directory_temp("", "aws-refresher-blocked-*", context.allocator)
+	testing.expect(t, directory_error == nil)
+	defer delete(directory)
+	defer os.remove(directory)
+	credential_test_absent(directory)
+	testing.expect(t, os.set_env("AWS_CONTAINER_CREDENTIALS_RELATIVE_URI", "/v2/credentials/fixture") == nil)
+	clock := Credential_Test_Clock {
+		now = credential_test_instant("2023-12-01T00:00:00Z"),
+	}
+	http := Credential_Test_HTTP {
+		body  = CREDENTIAL_TEST_OLD,
+		block = true,
+	}
+	credential_test_http_state = &http
+	defer credential_test_http_state = nil
+	cache: Credential_Cache
+	testing.expect_value(t, credential_test_cache(&cache, &clock).kind, .None)
+
+	refresher: Credential_Refresher
+	started := credential_refresher_start(&refresher, &cache, 20 * time.Millisecond, time.Minute)
+	testing.expect_value(t, started.kind, Credential_Error_Kind.None)
+	testing.expect(
+		t,
+		credential_test_wait_until(credential_test_provider_entered),
+		"the refresher's refresh entered the fake provider",
+	)
+
+	// Stop from another thread while the provider holds the refresh.
+	credential_test_stopper = thread.create_and_start_with_data(&refresher, credential_test_stop_refresher)
+	defer credential_test_stopper = nil
+	testing.expect(t, credential_test_stopper != nil)
+	time.sleep(50 * time.Millisecond)
+	sync.mutex_lock(&http.mutex)
+	http.release = true
+	sync.cond_broadcast(&http.cond)
+	sync.mutex_unlock(&http.mutex)
+
+	if credential_test_stopper == nil {
+		credential_refresher_stop(&refresher)
+	} else {
+		testing.expect(
+			t,
+			credential_test_wait_until(credential_test_stopper_done),
+			"stop returned once the blocked refresh ended",
+		)
+		thread.join(credential_test_stopper)
+		thread.destroy(credential_test_stopper)
+	}
+	testing.expect(t, refresher.thread == nil)
+	testing.expect_value(t, http.calls, 1)
+	testing.expect_value(t, credential_cache_destroy(&cache).kind, Credential_Error_Kind.None)
+}

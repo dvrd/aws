@@ -79,10 +79,30 @@ an_exact_environment_is_all_a_child_sees :: proc(t: ^testing.T) {
 	defer os.remove_all(work)
 	file := fmt.aprintf("%s/env", work)
 	child, started := spawn({command = {"/usr/bin/env"}, environment = {"ONLY=1"}, exact = true, output = file})
-	testing.expect(t, started)
-	code, finished := wait(child, 10 * time.Second)
+	if !testing.expect(t, started) {
+		return
+	}
+	code, finished := wait(&child, 10 * time.Second)
 	testing.expect(t, finished && code == 0)
 	testing.expect_value(t, strings.trim_space(read_text(file)), "ONLY=1")
 }
 
 SHA256_OF_SOURCE_A :: "c5c36b8189a55ac1308879d5a730951fd75282a1e7175bdda77e1a2e8649f14a"
+
+@(test)
+alive_is_false_once_the_child_exits :: proc(t: ^testing.T) {
+	context.allocator = context.temp_allocator
+	child, started := spawn({command = {"/bin/sh", "-c", "exit 4"}})
+	if !testing.expect(t, started) {
+		return
+	}
+	defer stop(&child)
+	start := time.tick_now()
+	for alive(&child) && time.tick_since(start) < 2 * time.Second {
+		time.sleep(5 * time.Millisecond)
+	}
+	testing.expect(t, child.reaped)
+	testing.expect(t, !alive(&child))
+	code, finished := wait(&child, time.Second)
+	testing.expect(t, finished && code == 4)
+}

@@ -123,5 +123,5 @@ build_command :: proc(arguments: []string) -> int {
 	append(&command, compiler(), "check", "src", "-no-entry-point", "-vet", "-warnings-as-errors")
 	append(&command, fmt.aprintf("-collection:shared=%s", shared_source()))
 	append(&command, ..arguments)
-	return run(command[:])
+	return run(command[:], timeout = BUILD_TIMEOUT)
 }

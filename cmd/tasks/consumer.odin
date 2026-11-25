@@ -63,10 +63,11 @@ consumer_command :: proc(arguments: []string) -> int {
 			fmt.aprintf("-collection:shared=%s/shared", work),
 			fmt.aprintf("-out:%s", binary),
 		},
+		timeout = BUILD_TIMEOUT,
 	); code != 0 {
 		return code
 	}
-	if code := run({binary}); code != 0 {
+	if code := run({binary}, timeout = RUN_TIMEOUT); code != 0 {
 		return code
 	}
 	fmt.println("AWS isolated vendored consumer: build and execution passed (offline)")

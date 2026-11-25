@@ -730,7 +730,9 @@ credential_resolve :: proc(
 		loaded, unsupported, data, read_error := credential_profile_load(path, profile, true)
 		defer credential_wipe_text(string(data))
 
-		if read_error.kind != .None && read_error.kind != .Open_Failed {
+		// A missing path, or one that is not a regular file (/dev/null is a common
+		// way to turn the file off), means no profile; anything else fails closed.
+		if read_error.kind != .None && read_error.kind != .Open_Failed && read_error.kind != .Not_Regular {
 			return nil, {kind = .Unavailable, source = .Profile}
 		}
 

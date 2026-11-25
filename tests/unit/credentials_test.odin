@@ -1486,14 +1486,52 @@ credential_profile_read_errors_stop_resolution :: proc(t: ^testing.T) {
 	testing.expect_value(t, http.calls, 0)
 	testing.expect_value(t, credential_cache_destroy(&oversized).kind, .None)
 
-	// Plan 007 changes this case: a path that is not a regular file will be
-	// skipped like a missing file, and ECS answers.
+	// A path that is not a regular file is skipped like a missing file, and ECS answers.
 	testing.expect(t, os.set_env("AWS_SHARED_CREDENTIALS_FILE", directory) == nil)
 	not_a_file: Credential_Cache
 	testing.expect_value(t, credential_test_cache(&not_a_file, &clock).kind, .None)
-	testing.expect_value(t, credential_refresh(&not_a_file), expected)
-	testing.expect_value(t, http.calls, 0)
+	testing.expect_value(t, credential_refresh(&not_a_file), Credential_Error{})
+	testing.expect_value(t, http.calls, 1)
 	testing.expect_value(t, credential_cache_destroy(&not_a_file).kind, .None)
+}
+
+@(test)
+credential_dev_null_profile_falls_through_to_metadata :: proc(t: ^testing.T) {
+	saved := credential_test_env_push()
+	defer credential_test_env_pop(saved)
+	directory, error := os.make_directory_temp("", "aws-cache-dev-null-*", context.allocator)
+	testing.expect(t, error == nil)
+	defer delete(directory)
+	defer os.remove(directory)
+	credential_test_absent(directory)
+	testing.expect(t, os.set_env("AWS_CONTAINER_CREDENTIALS_RELATIVE_URI", "/v2/credentials/fixture") == nil)
+	testing.expect(t, os.set_env("AWS_SHARED_CREDENTIALS_FILE", "/dev/null") == nil)
+	clock := Credential_Test_Clock {
+		now = credential_test_instant("2023-12-01T00:00:00Z"),
+	}
+
+	http := Credential_Test_HTTP {
+		body = CREDENTIAL_TEST_OLD,
+	}
+
+	credential_test_http_state = &http
+	defer credential_test_http_state = nil
+	cache: Credential_Cache
+	testing.expect_value(t, credential_test_cache(&cache, &clock).kind, .None)
+	testing.expect_value(t, credential_refresh(&cache), Credential_Error{})
+	testing.expect_value(t, http.calls, 1)
+	lease, lease_error := credential_lease(&cache)
+	testing.expect_value(t, lease_error.kind, .None)
+	testing.expect_value(t, lease.source, .ECS)
+	credential_lease_release(&cache, &lease)
+	testing.expect_value(t, credential_cache_destroy(&cache).kind, .None)
+
+	http = {
+		body = CREDENTIAL_TEST_FAR,
+	}
+	credentials, ok := aws_credentials_with_http(credential_test_http)
+	testing.expect(t, ok && credentials.secret_key == "far-secret")
+	testing.expect_value(t, http.calls, 1)
 }
 
 @(test)

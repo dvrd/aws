@@ -57,22 +57,30 @@ read_all :: proc(descriptor: posix.FD, limit: int) -> (data: []u8, failure: Fail
 	return buffer[:used], .None
 }
 
-// Reads one private metadata document without following a link.
-read_private :: proc(path: string) -> (object: json.Object, failure: Failure) {
+// Reads one private metadata document without following a link, and returns the
+// bytes it parsed so callers can hash exactly what they read.
+read_private_bytes :: proc(path: string) -> (object: json.Object, data: []u8, failure: Failure) {
 	descriptor := posix.open(strings.clone_to_cstring(path), {.NOFOLLOW, .NONBLOCK})
 	if descriptor < 0 {
-		return nil, .System
+		return nil, nil, .System
 	}
 	defer posix.close(descriptor)
 	info := private_file(descriptor) or_return
 	if info.st_size > MAX_BYTES {
-		return nil, .Metadata_Too_Large
+		return nil, nil, .Metadata_Too_Large
 	}
-	data := read_all(descriptor, MAX_BYTES) or_return
+	data = read_all(descriptor, MAX_BYTES) or_return
 	if len(data) > MAX_BYTES {
-		return nil, .Metadata_Too_Large
+		return nil, nil, .Metadata_Too_Large
 	}
-	return decode_object(data)
+	object = decode_object(data) or_return
+	return object, data, .None
+}
+
+// Reads one private metadata document without following a link.
+read_private :: proc(path: string) -> (object: json.Object, failure: Failure) {
+	object, _ = read_private_bytes(path) or_return
+	return object, .None
 }
 
 write_all :: proc(descriptor: posix.FD, data: []u8) -> bool {
@@ -166,14 +174,6 @@ sha256_hex :: proc(data: []u8) -> string {
 	digest: [32]u8
 	hash.hash(.SHA256, data, digest[:])
 	return string(hex.encode(digest[:]))
-}
-
-file_sha256 :: proc(path: string) -> (digest: string, failure: Failure) {
-	data, error := os.read_entire_file(path, context.allocator)
-	if error != nil {
-		return "", .System
-	}
-	return sha256_hex(data), .None
 }
 
 // Digest of the native probe: an absolute, regular, executable file that group and

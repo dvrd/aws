@@ -1355,6 +1355,50 @@ status_classifier_matches_the_documented_rule :: proc(t: ^testing.T) {
 	}
 }
 
+// A response laid out the way Surf builds one: body_storage allocated with
+// context.allocator and holding payload, body a view of its first body_length bytes.
+s3_test_response :: proc(payload: string, body_length: int) -> network_client.Response {
+	storage := make([dynamic]u8, 0, 4096, context.allocator)
+	append(&storage, payload)
+	return {status = 200, allocator = context.allocator, body_storage = storage, body = storage[:body_length]}
+}
+
+@(test)
+s3_get_body_hand_over_frees_exactly_once :: proc(t: ^testing.T) {
+	{
+		// A whole body is taken: the caller owns Surf's storage.
+		response := s3_test_response("object bytes", len("object bytes"))
+		storage := raw_data(response.body_storage)
+		body, ok := s3_get_body_take(&response, context.allocator)
+		testing.expect(t, ok)
+		testing.expect_value(t, string(body), "object bytes")
+		testing.expect(t, raw_data(body) == storage)
+		testing.expect(t, response.body == nil)
+		network_client.response_destroy(&response)
+		delete(body, context.allocator)
+	}
+	{
+		// A view that is not the whole buffer cannot be taken, so it is copied.
+		response := s3_test_response("object bytes and more", len("object bytes"))
+		storage := raw_data(response.body_storage)
+		body, ok := s3_get_body_take(&response, context.allocator)
+		testing.expect(t, ok)
+		testing.expect_value(t, string(body), "object bytes")
+		testing.expect(t, raw_data(body) != storage)
+		network_client.response_destroy(&response)
+		delete(body, context.allocator)
+	}
+	{
+		// An empty body gives a result that frees cleanly.
+		response := s3_test_response("", 0)
+		body, ok := s3_get_body_take(&response, context.allocator)
+		testing.expect(t, ok)
+		testing.expect_value(t, len(body), 0)
+		network_client.response_destroy(&response)
+		delete(body, context.allocator)
+	}
+}
+
 @(test)
 s3_transport_errors_say_whether_to_retry :: proc(t: ^testing.T) {
 	Case :: struct {

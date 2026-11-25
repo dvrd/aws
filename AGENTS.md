@@ -35,6 +35,7 @@ Run `task --list` for the current set.
 - `task deps`: compare the shared collection with the pins in `.krs/packages.json`.
 - `task odin:pin`: record the current fork commit in `ODIN_COMMIT`.
 - `task qualify -- <command> --state-dir <dir>`: live AWS qualification (see below).
+- `task qualify:probe`: build the live qualification probe into `build/probe`.
 - `task version`: show the last release and the next one. `task release`: tag the next version.
 
 ## Tests
@@ -69,4 +70,6 @@ task qualify -- {plan,run,reconcile,cleanup,send,status} --state-dir DIR
     [--allow-write] [--ses-sender ADDRESS] [--ses-identity-verified] [--live]
 ```
 
-The runner launches the native probe in `tests/qualification/probe/`. It never replays a mutation whose outcome is unknown (`phase_permitted` in `cmd/qualify/runner.odin`). The resource plan is a document with `schema`, `phase` set to `READY`, `bucket` (`webtools-qualification-<suffix>`), `region`, `prefix` (`qualification/<32 hex>/`), `profile` or `credential_source` with `expected_role_arn`, `expected_account` (`<account-id>`), `public_access_block_verified` set to true, and `encryption` set to `AES256`. Keep real account ids, ARNs and bucket names out of the repository.
+`task qualify:probe` builds `build/probe`, the binary that `--binary` takes (an absolute path).
+
+The runner launches the native probe in `tests/qualification/probe/`. It never replays a mutation whose outcome is unknown (`phase_permitted` in `cmd/qualify/runner.odin`). The resource plan is a document with `schema`, `phase` set to `READY`, `bucket` (`webtools-qualification-<suffix>`), `region`, `prefix` (`qualification/<32 hex>/`), `profile` or `credential_source` with `expected_role_arn`, `expected_account` (`<account-id>`), `public_access_block_verified` set to true, and `encryption` set to `AES256`. Keep real account ids, ARNs and bucket names out of the repository. The procedure is in `docs/qualification.md`; `docs/qualification.example.json` is a resource plan with placeholder values.

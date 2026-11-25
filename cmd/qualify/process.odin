@@ -111,8 +111,14 @@ capture_child :: proc(
 		}
 	}
 	patience := max(deadline - runner.monotonic(runner), 10 * time.Millisecond)
-	if !child_wait(child, &status, patience) {
+	switch child_wait(child, &status, patience) {
+	case .Running:
 		return 0, nil, .Child_Deadline
+	case .Lost:
+		// The kernel or someone else reaped it: never signal that pid again.
+		reaped = true
+		return 0, nil, .System
+	case .Reaped:
 	}
 	reaped = true
 	if posix.WIFEXITED(status) {
@@ -123,20 +129,25 @@ capture_child :: proc(
 	return code, collected[:], .None
 }
 
-// Reaps child within patience of real time. False means it is still running.
-child_wait :: proc(child: posix.pid_t, status: ^c.int, patience: time.Duration) -> bool {
+Child_Wait :: enum {
+	Reaped, // status holds the child's exit status
+	Running, // patience ran out; the child was not reaped
+	Lost, // waitpid failed: the status is unknown (for example SIGCHLD is ignored)
+}
+
+// Reaps child within patience of real time.
+child_wait :: proc(child: posix.pid_t, status: ^c.int, patience: time.Duration) -> Child_Wait {
 	started := time.tick_now()
 	for {
 		result := posix.waitpid(child, status, {.NOHANG})
 		if result == child {
-			return true
+			return .Reaped
 		}
 		if result < 0 && posix.errno() != .EINTR {
-			// Nothing left to reap.
-			return true
+			return .Lost
 		}
 		if time.tick_since(started) >= patience {
-			return false
+			return .Running
 		}
 		time.sleep(2 * time.Millisecond)
 	}

@@ -1083,22 +1083,32 @@ s3_get_native :: proc(
 	if len(response.body) > bytes_max {
 		return nil, response.status, .Too_Large
 	}
-	// Surf allocated the body with allocator (no budget scope is configured), so
-	// the caller can own its storage outright. The slice starts at the
-	// allocation, so delete(body, allocator) frees it. An empty body or one Surf
-	// cannot hand over is copied instead.
+	taken, taken_ok := s3_get_body_take(&response, allocator)
+	if !taken_ok {
+		return nil, response.status, .Unavailable
+	}
+	return taken, response.status, .None
+}
+
+// Gives the caller a body it frees with delete(body, allocator). Surf allocated
+// the body with allocator (no budget scope is configured), so a non-empty body
+// Surf can hand over is taken outright; the slice starts at the allocation, so
+// that delete frees it. An empty body or one Surf cannot hand over is copied.
+// response must still be destroyed afterwards; ok is false when the copy fails.
+@(private)
+s3_get_body_take :: proc(response: ^surf.Response, allocator: mem.Allocator) -> (body: []u8, ok: bool) {
 	if len(response.body) > 0 {
-		chunk, take_error := surf.response_take_body(&response)
+		chunk, take_error := surf.response_take_body(response)
 		if take_error.kind == .None {
-			return chunk.storage[:len(chunk.data)], response.status, .None
+			return chunk.storage[:len(chunk.data)], true
 		}
 	}
 	copied, allocation_error := make([]u8, len(response.body), allocator)
 	if allocation_error != nil {
-		return nil, response.status, .Unavailable
+		return nil, false
 	}
 	copy(copied, response.body)
-	return copied, response.status, .None
+	return copied, true
 }
 
 // Surf's request header type, named through its API so aws needs no http import.

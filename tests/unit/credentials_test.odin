@@ -949,7 +949,7 @@ credential_replies_of_the_default_executor_are_erased :: proc(t: ^testing.T) {
 }
 
 @(test)
-credentials_with_control_characters_are_refused :: proc(t: ^testing.T) {
+credentials_must_be_visible_ascii :: proc(t: ^testing.T) {
 	testing.expect(t, aws_credentials_valid({"fixture-key", "fixture/secret+value", "token/with+base64=="}))
 	testing.expect(t, aws_credentials_valid({"fixture-key", "fixture-secret", ""}))
 	for value in ([]AWS_Credentials {
@@ -958,6 +958,11 @@ credentials_with_control_characters_are_refused :: proc(t: ^testing.T) {
 			{"key", "secret", "tok\x7fen"},
 			{"key", "secret", "tok\ren"},
 			{"key\x00", "secret", ""},
+			{"key ", "secret", ""},
+			{"key", " secret", ""},
+			{"key", "secret", "token "},
+			{"key", "sec ret", ""},
+			{"key", "secret", "tokén"},
 		}) {
 		testing.expect(t, !aws_credentials_valid(value))
 	}

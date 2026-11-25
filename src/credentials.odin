@@ -164,12 +164,11 @@ aws_credentials_valid :: proc(value: AWS_Credentials) -> bool {
 		return false
 	}
 
-	// The key and the token are sent as header values, so no control character.
+	// The keys and the token go into header values as written: visible ASCII only,
+	// so no side can trim or reject a byte the signature covers.
 	for text in ([]string{value.access_key, value.secret_key, value.session_token}) {
-		for index in 0 ..< len(text) {
-			if text[index] < 0x20 || text[index] == 0x7f {
-				return false
-			}
+		if !text_visible(text) {
+			return false
 		}
 	}
 
@@ -1045,13 +1044,7 @@ credential_relative_uri_ok :: proc(relative: string) -> bool {
 // Printable ASCII only: no space, control character or byte above 0x7e. What the
 // metadata service returns is put into URLs and header values.
 credential_text_printable :: proc(text: string) -> bool {
-	for index in 0 ..< len(text) {
-		if text[index] <= 0x20 || text[index] > 0x7e {
-			return false
-		}
-	}
-
-	return true
+	return text_visible(text)
 }
 
 credential_bounded_valid :: proc(value: AWS_Credentials) -> bool {

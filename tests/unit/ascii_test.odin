@@ -25,3 +25,15 @@ ascii_classes_accept_ascii_only :: proc(t: ^testing.T) {
 		testing.expectf(t, !is_alphanumeric(character) && !is_lower(character), "%v", character)
 	}
 }
+
+@(test)
+text_predicates_draw_the_documented_lines :: proc(t: ^testing.T) {
+	for value in 0 ..< 256 {
+		bytes := [1]u8{u8(value)}
+		text := string(bytes[:])
+		testing.expect_value(t, text_visible(text), value >= 0x21 && value <= 0x7e)
+		testing.expect_value(t, text_without_controls(text), value >= 0x20 && value != 0x7f)
+	}
+	testing.expect(t, text_visible(""))
+	testing.expect(t, text_without_controls(""))
+}

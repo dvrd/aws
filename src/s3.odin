@@ -437,10 +437,8 @@ s3_key_strict :: proc(key: string) -> bool {
 	if key == "" || len(key) > S3_KEY_BYTES_MAX {
 		return false
 	}
-	for index in 0 ..< len(key) {
-		if key[index] < 0x20 || key[index] == 0x7f {
-			return false
-		}
+	if !text_without_controls(key) {
+		return false
 	}
 	rest := key
 	for segment in strings.split_iterator(&rest, "/") {

@@ -55,6 +55,8 @@ REFERENCE_REQUESTS :: []Reference_Request {
 	{"GET", "emoji-😀", "examplebucket", "eu-west-3", true, "AKIAIOSFODNN7EXAMPLE", "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY", "", "", "https://s3.eu-west-3.amazonaws.com/examplebucket/emoji-%F0%9F%98%80", "d7622f4e4e3df1876403ac5bce05128760ec6d993afdc52583d055056cbf09dd"},
 	{"GET", "[brackets]{braces}|pipe", "examplebucket", "us-east-1", false, "AKIAIOSFODNN7EXAMPLE", "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY", "", "", "https://examplebucket.s3.us-east-1.amazonaws.com/%5Bbrackets%5D%7Bbraces%7D%7Cpipe", "0af81795ccea40ae3f2e547c1102020461a1fd6f6367508935433ce03b508d47"},
 	{"HEAD", "[brackets]{braces}|pipe", "examplebucket", "us-east-1", false, "AKIAIOSFODNN7EXAMPLE", "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY", "", "", "https://examplebucket.s3.us-east-1.amazonaws.com/%5Bbrackets%5D%7Bbraces%7D%7Cpipe", "a43a7eb8296e6d5f5bfd94476dd137d9f7c85cbcc44c3accc89bc041593ed04d"},
+	{"GET", "a b/c+d", "examplebucket", "cn-north-1", false, "AKIAIOSFODNN7EXAMPLE", "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY", "", "", "https://examplebucket.s3.cn-north-1.amazonaws.com.cn/a%20b/c%2Bd", "7fc4b8abc5164cc83a18d7a974de56740becdf05fd9c879a53ca499008382da1"},
+	{"PUT", "a b/c+d", "examplebucket", "cn-north-1", false, "AKIAIOSFODNN7EXAMPLE", "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY", "", "payload", "https://examplebucket.s3.cn-north-1.amazonaws.com.cn/a%20b/c%2Bd", "a7e8394c7a4eaaffa044673b0bf6d8e7f7323e4de34679ece7e09802fab226c7"},
 }
 
 Reference_Presign :: struct {
@@ -77,6 +79,8 @@ REFERENCE_PRESIGNS :: []Reference_Presign {
 	{"pct%20already", "assets.example.com", "eu-west-3", "ASIAEXAMPLE", "secret/with+chars==", "fixture/token+value==", 6060, "67270b366ed582e8e7dbc13c6d4dcb8adde87e5c5f251debb2d22bbb9d9f3230"},
 	{"a/../b", "assets.example.com", "eu-west-3", "AKIAIOSFODNN7EXAMPLE", "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY", "", 7060, "1c6182c8e515502b76ad7134e25c4cf077c412dab83cfa083031711adb3ebc91"},
 	{"emoji-😀", "examplebucket", "us-east-1", "ASIAEXAMPLE", "secret/with+chars==", "fixture/token+value==", 8060, "8e079de10c080db8c532ad173d7f519a8509fd3d4b3b363247371e426e87b7c5"},
+	{"a b/c+d", "examplebucket", "cn-north-1", "AKIAIOSFODNN7EXAMPLE", "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY", "", 1, "39d017d19e8fe606436e4cf5e3304a5a53304ec108629f415cf96d550f0ca2d0"},
+	{"a b/c+d", "examplebucket", "cn-north-1", "AKIAIOSFODNN7EXAMPLE", "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY", "", 604800, "fc42a4c8086f9df47aab4aff10b3594f55ff2f6521ef9eece67222098ec80a73"},
 }
 
 @(test)

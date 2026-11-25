@@ -877,6 +877,47 @@ credential_refresh_replaces_ahead_of_expiry_and_cached_leases_never_fetch :: pro
 }
 
 @(test)
+credential_cached_lease_reports_expired_after_a_failed_refresh :: proc(t: ^testing.T) {
+	saved := credential_test_env_push()
+	defer credential_test_env_pop(saved)
+	directory, directory_error := os.make_directory_temp("", "aws-cache-*", context.allocator)
+	testing.expect(t, directory_error == nil)
+	defer delete(directory)
+	defer os.remove(directory)
+	credential_test_absent(directory)
+	testing.expect(t, os.set_env("AWS_CONTAINER_CREDENTIALS_RELATIVE_URI", "/v2/credentials/fixture") == nil)
+	expires := credential_test_instant("2024-01-01T00:00:00Z")
+	clock := Credential_Test_Clock {
+		now = time.time_add(expires, -time.Hour),
+	}
+	http := Credential_Test_HTTP {
+		body = CREDENTIAL_TEST_OLD,
+		fail = true,
+	}
+	credential_test_http_state = &http
+	defer credential_test_http_state = nil
+
+	// A cache that never resolved reports Unavailable.
+	fresh: Credential_Cache
+	testing.expect_value(t, credential_test_cache(&fresh, &clock).kind, .None)
+	defer credential_cache_destroy(&fresh)
+	_, never := credential_lease_cached(&fresh)
+	testing.expect_value(t, never.kind, Credential_Error_Kind.Unavailable)
+
+	cache: Credential_Cache
+	testing.expect_value(t, credential_test_cache(&cache, &clock).kind, .None)
+	defer credential_cache_destroy(&cache)
+	testing.expect_value(t, credential_refresh(&cache).kind, Credential_Error_Kind.None)
+
+	// Past expiry, the refresh fails and drops the stale credentials.
+	clock.now = expires
+	testing.expect_value(t, credential_refresh(&cache).kind, Credential_Error_Kind.Unavailable)
+	_, expired := credential_lease_cached(&cache)
+	testing.expect_value(t, expired.kind, Credential_Error_Kind.Expired)
+	testing.expect_value(t, expired.source, Credential_Source.ECS)
+}
+
+@(test)
 credential_expiry_instants_need_a_zone_and_may_carry_a_fraction :: proc(t: ^testing.T) {
 	base, base_ok := credential_instant_parse("2030-01-02T03:04:05Z")
 	testing.expect(t, base_ok)

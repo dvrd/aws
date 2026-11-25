@@ -188,6 +188,7 @@ Credential_Cache :: struct {
 	refresh_attempt: u64,
 	failed_attempt:  u64,
 	refresh_error:   Credential_Error,
+	expired_source:  Credential_Source, // source of credentials dropped for expiry; None once new ones are published
 	waiters:         int,
 	live_readers:    int,
 	closed:          bool,
@@ -230,6 +231,7 @@ credential_cache_init :: proc(
 	cache.refresh_attempt = 0
 	cache.failed_attempt = 0
 	cache.refresh_error = {}
+	cache.expired_source = .None
 	cache.waiters = 0
 	cache.live_readers = 0
 	cache.closed = false
@@ -321,6 +323,9 @@ credential_lease_cached :: proc(
 	if cache.snapshot != nil {
 		return {}, {kind = .Expired, source = cache.snapshot.source}
 	}
+	if cache.expired_source != .None {
+		return {}, {kind = .Expired, source = cache.expired_source}
+	}
 	return {}, {kind = .Unavailable}
 }
 
@@ -392,6 +397,7 @@ credential_refresh_run :: proc(cache: ^Credential_Cache) -> (target: u64) {
 		snap.resolved = now
 		credential_snapshot_retire(cache, cache.snapshot)
 		cache.snapshot = snap
+		cache.expired_source = .None
 		snap = nil
 		cache.failed_attempt = 0
 		cache.refresh_error = {}
@@ -410,6 +416,7 @@ credential_refresh_run :: proc(cache: ^Credential_Cache) -> (target: u64) {
 
 		if cache.snapshot != nil && !credential_snapshot_usable(cache.snapshot, now) {
 			stale := cache.snapshot
+			cache.expired_source = stale.source
 			cache.snapshot = nil
 			credential_snapshot_retire(cache, stale)
 		}

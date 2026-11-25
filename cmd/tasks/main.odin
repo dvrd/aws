@@ -27,7 +27,7 @@ COMMANDS := [?]Command {
 		"Stage the checkout and run the Odin test suites.",
 	},
 	{"layout", layout_command, "layout", "Check that every source file has a unit test file of the same name."},
-	{"signatures", signatures_command, "signatures", "Recalculate the SigV4 fixtures with OpenSSL."},
+	{"signatures", signatures_command, "signatures", "Check the SigV4 reference signatures by recomputing them with OpenSSL."},
 	{"consumer", consumer_command, "consumer", "Build and run a consumer that vendors the library."},
 	{
 		"credentials",

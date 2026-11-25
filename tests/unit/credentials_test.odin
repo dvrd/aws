@@ -4,6 +4,7 @@ import network_client "shared:surf"
 import "core:fmt"
 import "core:mem"
 import "core:os"
+import "core:strings"
 import "core:sync"
 import "core:testing"
 import "core:thread"
@@ -71,6 +72,7 @@ Credential_Test_HTTP :: struct {
 	release:   bool,
 	ec2:       bool,
 	body:      string,
+	role:      string,
 	next_body: string,
 	rejected:  string,
 	mutex:     sync.Mutex,
@@ -113,7 +115,8 @@ credential_test_http :: proc(request: HTTP_Request) -> ([]u8, network_client.Buf
 		}
 
 		if request.method == "GET" && request.url == "http://169.254.169.254/latest/meta-data/iam/security-credentials/" {
-			return transmute([]u8)string("fixture-role\n"), {ok = true, status = 200}
+			role := state.role if state.role != "" else "fixture-role\n"
+			return transmute([]u8)role, {ok = true, status = 200}
 		}
 
 		if request.method != "GET" || request.url != "http://169.254.169.254/latest/meta-data/iam/security-credentials/fixture-role" {
@@ -187,9 +190,11 @@ credential_test_wait_until :: proc(ready: proc() -> bool) -> bool {
 }
 
 Credential_Probe :: struct {
-	backing: mem.Allocator,
-	visible: bool,
-	frees:   int,
+	backing:     mem.Allocator,
+	visible:     bool,
+	frees:       int,
+	allocations: int,
+	fail_at:     int,
 }
 
 credential_probe_contains :: proc(haystack: []byte, needle: string) -> bool {
@@ -218,6 +223,12 @@ credential_probe_allocate :: proc(
 	mem.Allocator_Error,
 ) {
 	probe := cast(^Credential_Probe)data
+	if mode == .Alloc || mode == .Alloc_Non_Zeroed {
+		probe.allocations += 1
+		if probe.fail_at != 0 && probe.allocations == probe.fail_at {
+			return nil, .Out_Of_Memory
+		}
+	}
 	if mode == .Free && old_memory != nil && old_size > 0 {
 		probe.frees += 1
 		bytes := ([^]byte)(old_memory)[:old_size]
@@ -1244,4 +1255,358 @@ profile_files_are_read_the_way_the_aws_cli_reads_them :: proc(t: ^testing.T) {
 	credentials, _, _, _ := credential_profile_load(path, "default", true)
 	testing.expect_value(t, credentials.secret_key, "s1==")
 	testing.expect_value(t, credentials.session_token, "t=1:2")
+}
+
+@(test)
+credential_rejected_documents_are_not_cached :: proc(t: ^testing.T) {
+	saved := credential_test_env_push()
+	defer credential_test_env_pop(saved)
+	directory, error := os.make_directory_temp("", "aws-cache-reject-*", context.allocator)
+	testing.expect(t, error == nil)
+	defer delete(directory)
+	defer os.remove(directory)
+	credential_test_absent(directory)
+	testing.expect(t, os.set_env("AWS_CONTAINER_CREDENTIALS_RELATIVE_URI", "/v2/credentials/fixture") == nil)
+	long_access := strings.repeat("a", 129)
+	defer delete(long_access)
+	long_access_document := fmt.aprintf(
+		`{{"Code":"Success","AccessKeyId":"%s","SecretAccessKey":"s","Token":"t","Expiration":"2024-01-01T00:00:00Z"}}`,
+		long_access,
+	)
+	defer delete(long_access_document)
+	documents := [?]string {
+		`{"Code":"Failure","AccessKeyId":"k","SecretAccessKey":"s","Token":"t","Expiration":"2024-01-01T00:00:00Z"}`,
+		`{bad`,
+		long_access_document,
+		`{"Code":"Success","AccessKeyId":"k","SecretAccessKey":"sec\u0001ret","Token":"t","Expiration":"2024-01-01T00:00:00Z"}`,
+		`{"Code":"Success","AccessKeyId":"k","SecretAccessKey":"s","Token":"t"}`,
+		`{"Code":"Success","AccessKeyId":"k","SecretAccessKey":"s","Token":"t","Expiration":"2024-01-01"}`,
+	}
+
+	for document, index in documents {
+		clock := Credential_Test_Clock {
+			now = credential_test_instant("2023-12-01T00:00:00Z"),
+		}
+
+		http := Credential_Test_HTTP {
+			body = document,
+		}
+
+		credential_test_http_state = &http
+		cache: Credential_Cache
+		testing.expect_value(t, credential_test_cache(&cache, &clock).kind, .None)
+		refresh_error := credential_refresh(&cache)
+		testing.expectf(
+			t,
+			refresh_error == Credential_Error{kind = .Unavailable, source = .ECS},
+			"document %d: refresh returned %v",
+			index,
+			refresh_error,
+		)
+		cached, cached_error := credential_lease_cached(&cache)
+		testing.expectf(t, cached_error.kind == .Unavailable, "document %d: nothing is published", index)
+		testing.expect(t, cached.snapshot == nil && cached.secret_key == "")
+		testing.expect_value(t, http.calls, 1)
+		testing.expect_value(t, http.rejected, "")
+		testing.expect_value(t, credential_cache_destroy(&cache).kind, .None)
+		credential_test_http_state = nil
+	}
+}
+
+@(test)
+credential_rejected_role_names_stop_before_the_document :: proc(t: ^testing.T) {
+	saved := credential_test_env_push()
+	defer credential_test_env_pop(saved)
+	directory, error := os.make_directory_temp("", "aws-cache-role-*", context.allocator)
+	testing.expect(t, error == nil)
+	defer delete(directory)
+	defer os.remove(directory)
+	credential_test_absent(directory)
+	testing.expect(t, os.unset_env("AWS_EC2_METADATA_DISABLED"))
+	long_role := strings.repeat("r", 129)
+	defer delete(long_role)
+	// The fake answers its default role for an empty string, so an empty role
+	// is a bare newline, which the resolver trims to nothing.
+	roles := [?]string{"\n", "a/b", "a?b", "a#b", "a\\b", "a@b", "role\tname", long_role}
+
+	for role, index in roles {
+		clock := Credential_Test_Clock {
+			now = credential_test_instant("2023-12-01T00:00:00Z"),
+		}
+
+		http := Credential_Test_HTTP {
+			body = CREDENTIAL_TEST_OLD,
+			ec2  = true,
+			role = role,
+		}
+
+		credential_test_http_state = &http
+		cache: Credential_Cache
+		testing.expect_value(t, credential_test_cache(&cache, &clock).kind, .None)
+		refresh_error := credential_refresh(&cache)
+		testing.expectf(
+			t,
+			refresh_error == Credential_Error{kind = .Unavailable, source = .EC2},
+			"role %d: refresh returned %v",
+			index,
+			refresh_error,
+		)
+		testing.expectf(t, http.calls == 2, "role %d: %d requests, want token and role list only", index, http.calls)
+		testing.expect_value(t, http.rejected, "")
+		testing.expect_value(t, credential_cache_destroy(&cache).kind, .None)
+		credential_test_http_state = nil
+	}
+}
+
+@(test)
+credential_profile_read_errors_stop_resolution :: proc(t: ^testing.T) {
+	saved := credential_test_env_push()
+	defer credential_test_env_pop(saved)
+	directory, error := os.make_directory_temp("", "aws-cache-profile-error-*", context.allocator)
+	testing.expect(t, error == nil)
+	defer delete(directory)
+	defer os.remove(directory)
+	credential_test_absent(directory)
+	testing.expect(t, os.set_env("AWS_CONTAINER_CREDENTIALS_RELATIVE_URI", "/v2/credentials/fixture") == nil)
+	path := fmt.aprintf("%s/credentials", directory)
+	defer delete(path)
+	defer os.remove(path)
+	large := make([]u8, 64 * 1024 + 1)
+	defer delete(large)
+	testing.expect(t, os.write_entire_file(path, large) == nil)
+	clock := Credential_Test_Clock {
+		now = credential_test_instant("2023-12-01T00:00:00Z"),
+	}
+
+	http := Credential_Test_HTTP {
+		body = CREDENTIAL_TEST_OLD,
+	}
+
+	credential_test_http_state = &http
+	defer credential_test_http_state = nil
+	expected := Credential_Error {
+		kind   = .Unavailable,
+		source = .Profile,
+	}
+
+	// A profile file over the size limit.
+	testing.expect(t, os.set_env("AWS_SHARED_CREDENTIALS_FILE", path) == nil)
+	oversized: Credential_Cache
+	testing.expect_value(t, credential_test_cache(&oversized, &clock).kind, .None)
+	testing.expect_value(t, credential_refresh(&oversized), expected)
+	testing.expect_value(t, http.calls, 0)
+	testing.expect_value(t, credential_cache_destroy(&oversized).kind, .None)
+
+	// Plan 007 changes this case: a path that is not a regular file will be
+	// skipped like a missing file, and ECS answers.
+	testing.expect(t, os.set_env("AWS_SHARED_CREDENTIALS_FILE", directory) == nil)
+	not_a_file: Credential_Cache
+	testing.expect_value(t, credential_test_cache(&not_a_file, &clock).kind, .None)
+	testing.expect_value(t, credential_refresh(&not_a_file), expected)
+	testing.expect_value(t, http.calls, 0)
+	testing.expect_value(t, credential_cache_destroy(&not_a_file).kind, .None)
+}
+
+@(test)
+credential_waiter_receives_the_leaders_failure :: proc(t: ^testing.T) {
+	saved := credential_test_env_push()
+	defer credential_test_env_pop(saved)
+	directory, error := os.make_directory_temp("", "aws-cache-leader-fail-*", context.allocator)
+	testing.expect(t, error == nil)
+	defer delete(directory)
+	defer os.remove(directory)
+	credential_test_absent(directory)
+	testing.expect(t, os.set_env("AWS_CONTAINER_CREDENTIALS_RELATIVE_URI", "/v2/credentials/fixture") == nil)
+	clock := Credential_Test_Clock {
+		now = credential_test_instant("2023-12-01T00:00:00Z"),
+	}
+
+	http := Credential_Test_HTTP {
+		body  = `{"Code":"Failure","AccessKeyId":"k","SecretAccessKey":"s","Token":"t","Expiration":"2024-01-01T00:00:00Z"}`,
+		block = true,
+	}
+
+	credential_test_http_state = &http
+	defer credential_test_http_state = nil
+	cache: Credential_Cache
+	testing.expect_value(t, credential_test_cache(&cache, &clock).kind, .None)
+	defer credential_cache_destroy(&cache)
+	leader := Credential_Test_Call {
+		cache = &cache,
+	}
+
+	leader_thread := thread.create_and_start_with_poly_data(&leader, credential_test_call)
+	testing.expect(t, leader_thread != nil)
+	testing.expect(
+		t,
+		credential_test_wait_until(credential_test_provider_entered),
+		"refresh entered the fake provider",
+	)
+	testing.expect_value(t, credential_refresh(&cache), Credential_Error{kind = .Busy})
+	waiter := Credential_Test_Call {
+		cache = &cache,
+	}
+
+	waiter_thread := thread.create_and_start_with_poly_data(&waiter, credential_test_call)
+	testing.expect(t, waiter_thread != nil)
+	credential_test_cache_state = &cache
+	credential_test_waiters_target = 1
+	defer credential_test_cache_state = nil
+	testing.expect(
+		t,
+		credential_test_wait_until(credential_test_waiters_reached),
+		"the waiter waits on the leader's refresh",
+	)
+	sync.mutex_lock(&http.mutex)
+	http.release = true
+	sync.cond_broadcast(&http.cond)
+	sync.mutex_unlock(&http.mutex)
+	thread.join(leader_thread)
+	thread.destroy(leader_thread)
+	thread.join(waiter_thread)
+	thread.destroy(waiter_thread)
+	testing.expect_value(t, http.calls, 1)
+	expected := Credential_Error {
+		kind   = .Unavailable,
+		source = .ECS,
+	}
+
+	testing.expect_value(t, leader.error, expected)
+	testing.expect_value(t, waiter.error, expected)
+	testing.expect(t, leader.lease.snapshot == nil && leader.lease.access_key == "" && leader.lease.secret_key == "")
+	testing.expect(t, waiter.lease.snapshot == nil && waiter.lease.access_key == "" && waiter.lease.secret_key == "")
+	testing.expect(t, leader.lease.session_token == "" && waiter.lease.session_token == "")
+	testing.expect_value(t, credential_cache_destroy(&cache).kind, .None)
+}
+
+@(test)
+credential_cancelled_and_closed_calls_do_no_io :: proc(t: ^testing.T) {
+	saved := credential_test_env_push()
+	defer credential_test_env_pop(saved)
+	directory, error := os.make_directory_temp("", "aws-cache-closed-*", context.allocator)
+	testing.expect(t, error == nil)
+	defer delete(directory)
+	defer os.remove(directory)
+	credential_test_absent(directory)
+	testing.expect(t, os.set_env("AWS_CONTAINER_CREDENTIALS_RELATIVE_URI", "/v2/credentials/fixture") == nil)
+	clock := Credential_Test_Clock {
+		now = credential_test_instant("2023-12-01T00:00:00Z"),
+	}
+
+	http := Credential_Test_HTTP {
+		body = CREDENTIAL_TEST_OLD,
+	}
+
+	credential_test_http_state = &http
+	defer credential_test_http_state = nil
+	cache: Credential_Cache
+	testing.expect_value(t, credential_test_cache(&cache, &clock).kind, .None)
+	cancel := Credential_Cancel{}
+	credential_cancel(&cache, &cancel)
+	cancelled, cancelled_error := credential_lease(&cache, &cancel)
+	testing.expect_value(t, cancelled_error.kind, .Cancelled)
+	testing.expect(t, cancelled.snapshot == nil && cancelled.secret_key == "")
+	testing.expect_value(t, http.calls, 0)
+	testing.expect_value(t, credential_cache_destroy(&cache).kind, .None)
+	cached, cached_error := credential_lease_cached(&cache)
+	testing.expect_value(t, cached_error.kind, .Closed)
+	testing.expect(t, cached.snapshot == nil)
+	testing.expect_value(t, credential_refresh(&cache).kind, .Closed)
+	closed, closed_error := credential_lease(&cache)
+	testing.expect_value(t, closed_error.kind, .Closed)
+	testing.expect(t, closed.snapshot == nil)
+	testing.expect_value(t, http.calls, 0)
+}
+
+@(test)
+credential_cache_init_refuses_bad_arguments :: proc(t: ^testing.T) {
+	saved := credential_test_env_push()
+	defer credential_test_env_pop(saved)
+	directory, error := os.make_directory_temp("", "aws-cache-init-*", context.allocator)
+	testing.expect(t, error == nil)
+	defer delete(directory)
+	defer os.remove(directory)
+	credential_test_absent(directory)
+	testing.expect(t, os.set_env("AWS_CONTAINER_CREDENTIALS_RELATIVE_URI", "/v2/credentials/fixture") == nil)
+	clock := Credential_Test_Clock {
+		now = credential_test_instant("2023-12-01T00:00:00Z"),
+	}
+
+	http := Credential_Test_HTTP {
+		body = CREDENTIAL_TEST_OLD,
+	}
+
+	credential_test_http_state = &http
+	defer credential_test_http_state = nil
+	testing.expect_value(
+		t,
+		credential_cache_init(nil, credential_test_http, credential_test_clock, &clock).kind,
+		.Invalid_Argument,
+	)
+	blank: Credential_Cache
+	testing.expect_value(t, credential_cache_init(&blank, nil, credential_test_clock, &clock).kind, .Invalid_Argument)
+	testing.expect_value(t, credential_cache_init(&blank, credential_test_http, nil, &clock).kind, .Invalid_Argument)
+	testing.expect_value(
+		t,
+		credential_cache_init(&blank, credential_test_http, credential_test_clock, &clock, allocator = mem.Allocator{}).kind,
+		.Invalid_Argument,
+	)
+	cache: Credential_Cache
+	testing.expect_value(t, credential_test_cache(&cache, &clock).kind, .None)
+	testing.expect_value(t, credential_refresh(&cache).kind, .None)
+	testing.expect_value(t, credential_test_cache(&cache, &clock).kind, .Invalid_Argument)
+	held, held_error := credential_lease_cached(&cache)
+	testing.expect_value(t, held_error.kind, .None)
+	testing.expect_value(t, held.secret_key, "old-secret")
+	credential_lease_release(&cache, &held)
+	testing.expect_value(t, credential_cache_destroy(&cache).kind, .None)
+}
+
+@(test)
+credential_snapshot_allocation_failures_leave_nothing_behind :: proc(t: ^testing.T) {
+	probe := Credential_Probe {
+		backing = context.allocator,
+		fail_at = 1,
+	}
+
+	allocator := mem.Allocator {
+		procedure = credential_probe_allocate,
+		data      = &probe,
+	}
+
+	expected := Credential_Error {
+		kind   = .Allocation_Failed,
+		source = .ECS,
+	}
+
+	snap, failure := credential_snapshot_new(allocator, .ECS, "k", "old-secret", "t", {}, false)
+	testing.expect(t, snap == nil)
+	testing.expect_value(t, failure, expected)
+	testing.expect_value(t, probe.frees, 0)
+
+	probe = {
+		backing = context.allocator,
+		fail_at = 2,
+	}
+
+	snap, failure = credential_snapshot_new(allocator, .ECS, "k", "old-secret", "t", {}, false)
+	testing.expect(t, snap == nil)
+	testing.expect_value(t, failure, expected)
+	testing.expect_value(t, probe.frees, 1)
+	testing.expect(t, !probe.visible, "the released storage was wiped")
+
+	probe = {
+		backing = context.allocator,
+	}
+
+	snap, failure = credential_snapshot_new(allocator, .ECS, "k", "old-secret", "t", {}, false)
+	testing.expect_value(t, failure.kind, .None)
+	testing.expect(t, snap != nil)
+	owner := Credential_Cache {
+		allocator = allocator,
+	}
+
+	credential_snapshot_erase(&owner, snap)
+	testing.expect(t, !probe.visible, "the erased snapshot was wiped")
+	testing.expect(t, probe.frees > 0, "the storage was released")
 }

@@ -18,7 +18,9 @@ native_errors_command :: proc(arguments: []string) -> int {
 	if !staged {
 		return fail("cannot stage the shared collection")
 	}
-	sanitizer_clang_select()
+	if !sanitizer_clang_select() {
+		return 1
+	}
 	probe := fmt.aprintf("%s/probe", work)
 	driver := fmt.aprintf("%s/driver", work)
 	builds := [][]string {

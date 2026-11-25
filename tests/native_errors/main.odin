@@ -6,9 +6,9 @@
 package main
 
 import "core:bytes"
-import tls "core:crypto/tls"
-import credentials "core:crypto/tls/credentials"
-import store "core:crypto/tls/credentials/store"
+import tls "shared:async/tls"
+import credentials "shared:async/tls/credentials"
+import store "shared:async/tls/credentials/store"
 import "core:encoding/json"
 import "core:fmt"
 import "core:nbio"
@@ -153,7 +153,7 @@ session_close :: proc(s: ^Session) {
 		callback  = session_closed,
 		user_data = s,
 	}
-	if net.async_close(tls.server_async_connection(&s.server), &s.close).kind != .None {
+	if net.async_close(tls.server_async_connection(&s.server), &s.close) != nil {
 		s.closed = true
 		if s.observed.failure == "" {
 			s.observed.failure = "close rejected"
@@ -171,16 +171,16 @@ session_read :: proc(s: ^Session) {
 		peer_fail(s, "request exceeds the owned bound")
 		return
 	}
-	deadline := time.time_add(time.now(), PEER_TIMEOUT)
+	deadline := time.tick_add(time.tick_now(), PEER_TIMEOUT)
 	connection := tls.server_async_connection(&s.server)
-	if net.async_read(connection, &s.read, s.input[s.used:s.used + size], deadline).kind != .None {
+	if net.async_read(connection, &s.read, s.input[s.used:s.used + size], deadline) != nil {
 		peer_fail(s, "read rejected")
 	}
 }
 
 handshake_done :: proc(op: ^tls.Server_Async_Handshake_Operation) {
 	s := cast(^Session)op.user_data
-	if op.err.kind != .None {
+	if op.err != nil {
 		// The probe refused the certificate (or left) before any request.
 		s.observed.tls_rejected = true
 		session_close(s)
@@ -195,7 +195,7 @@ handshake_done :: proc(op: ^tls.Server_Async_Handshake_Operation) {
 
 read_done :: proc(op: ^net.Async_Operation) {
 	s := cast(^Session)op.user_data
-	if op.result.err.kind != .None || op.result.count <= 0 {
+	if op.result.err != nil || op.result.count <= 0 {
 		peer_fail(s, "incomplete body" if s.head_found else "incomplete request")
 		return
 	}
@@ -247,16 +247,16 @@ read_done :: proc(op: ^net.Async_Operation) {
 		callback  = write_done,
 		user_data = s,
 	}
-	deadline := time.time_add(time.now(), PEER_TIMEOUT)
+	deadline := time.tick_add(time.tick_now(), PEER_TIMEOUT)
 	connection := tls.server_async_connection(&s.server)
-	if net.async_write(connection, &s.write, s.output[:s.output_size], deadline).kind != .None {
+	if net.async_write(connection, &s.write, s.output[:s.output_size], deadline) != nil {
 		peer_fail(s, "write rejected")
 	}
 }
 
 write_done :: proc(op: ^net.Async_Operation) {
 	s := cast(^Session)op.user_data
-	if op.result.err.kind != .None || op.result.count != s.output_size {
+	if op.result.err != nil || op.result.count != s.output_size {
 		peer_fail(s, "incomplete response")
 		return
 	}
@@ -360,14 +360,14 @@ serve :: proc(socket: net.TCP_Socket, credential_store: ^store.Store, method: st
 		handshake_timeout = PEER_TIMEOUT,
 	}
 	transport := nbio.tcp_async_connection(&s.tcp)
-	if tls.server_async_server(&s.server, transport, nbio.async_executor(), config, context.allocator) != .None {
+	if tls.server_async_server(&s.server, transport, nbio.async_executor(), config, context.allocator) != nil {
 		fail("owned TLS server rejected its configuration")
 	}
 	s.handshake = {
 		callback  = handshake_done,
 		user_data = s,
 	}
-	if tls.server_async_handshake(&s.server, &s.handshake).kind != .None {
+	if tls.server_async_handshake(&s.server, &s.handshake) != nil {
 		fail("owned TLS handshake not accepted")
 	}
 	if nbio.run() != nil || !s.closed {

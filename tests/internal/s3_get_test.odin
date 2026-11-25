@@ -6,7 +6,7 @@ import "core:strings"
 import "core:sync"
 import "core:testing"
 import "core:time"
-import tls "core:crypto/tls"
+import tls "shared:async/tls"
 import x509 "core:crypto/x509"
 
 @(private)
@@ -216,7 +216,7 @@ s3_get_native_explicit_platform_trust_survives_config_preflight :: proc(t: ^test
 	config := s3_get_native_config(1000, 0, anchor[:0])
 	settings := config.tls
 	settings.server_name = "s3.us-east-1.amazonaws.com"
-	testing.expect_value(t, tls.config_validate(settings), .None)
+	testing.expect_value(t, tls.config_validate(settings), nil)
 	testing.expect(t, raw_data(config.tls.root_cas) != nil && len(config.tls.root_cas) == 0)
 	testing.expect_value(t, config.max_body_size, 1)
 	testing.expect(t, !config.allow_http && config.max_redirects == 0 && !config.http3)

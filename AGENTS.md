@@ -7,7 +7,7 @@
 - The Odin fork at `~/dev/oss/Odin`. Check: `odin version`. `ODIN_COMMIT` records the fork commit the suites are tested with; `task deps` reports drift from the pins.
 - `krs`, with the packages pinned in `.krs/packages.json` (`async`, `surf`, `websocket`) installed or linked into the shared collection. Check: `krs --version`, then `task deps`. Use `krs install`, `krs update <pkg>@<tag>` and `krs link <pkg>`; never edit the shared collection by hand.
 - `openssl` on `PATH`: `cmd/tasks/signatures.odin` runs `openssl dgst` to check SigV4 signatures independently. Check: `openssl version`.
-- For the sanitized tasks (`test:credentials`, `test:loopback`, `test:native-errors`), a clang whose major version equals Odin's LLVM backend. Check: `odin report | grep LLVM`, then install `llvm@<N>`. `sanitizer_clang_select` in `cmd/tasks/common.odin` looks in `/opt/homebrew/opt/llvm@<N>/bin/clang`, `/usr/local/opt/llvm@<N>/bin/clang` and `/usr/lib/llvm-<N>/bin/clang`. Apple's clang usually does not match.
+- For the sanitized tasks (`test:credentials`, `test:loopback`, `test:native-errors`), a clang whose major version equals Odin's LLVM backend. Check: `odin report | grep LLVM`, then install `llvm@<N>`. `sanitizer_clang_select` in `cmd/tasks/common.odin` looks in `/opt/homebrew/opt/llvm@<N>/bin/clang`, `/usr/local/opt/llvm@<N>/bin/clang` and `/usr/lib/llvm-<N>/bin/clang`. If neither a versioned clang nor the system clang matches the `Backend: LLVM` major and no `ODIN_CLANG_PATH` is set, the task stops with `need clang <N>`.
 
 ## Environment variables
 
@@ -24,6 +24,8 @@ The library itself reads `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_SESS
 Run `task --list` for the current set.
 
 - `task check`: type-check and run every offline test.
+- `task check:fast`: type-check and run the unit tests; the inner loop before `task check`.
+- `task hooks:install`: run `task check` on each pushed commit (sets `core.hooksPath`).
 - `task build`: type-check the library with vet and warnings as errors.
 - `task test`: run the Odin suites. The fast loop is `task test -- --package unit`; `-- --package unit/tasks` runs the task runner's tests; `task test -- -- -define:ODIN_TEST_NAMES=aws.<test_name>` runs one test.
 - `task test:layout`: check the test layout rule only.

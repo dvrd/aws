@@ -71,3 +71,13 @@ release_accepts_stable_and_allow_drift :: proc(t: ^testing.T) {
 	_, valid := release_options({"--allow"})
 	testing.expect(t, !valid)
 }
+
+@(test)
+release_accepts_push :: proc(t: ^testing.T) {
+	options, ok := release_options({"--push"})
+	testing.expect(t, ok && options.push && !options.stable && !options.allow_drift)
+	options, ok = release_options({"--push", "--stable", "--allow-drift"})
+	testing.expect(t, ok && options.push && options.stable && options.allow_drift)
+	_, valid := release_options({"--publish"})
+	testing.expect(t, !valid)
+}

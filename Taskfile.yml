@@ -144,8 +144,9 @@ tasks:
       bump to v1. Publishing v1.0.0 is a decision made by asking for it:
 
         task release -- --stable
+        task release -- --push      # tag, then push the tag to origin (main must be pushed)
 
-      Pass --allow-drift to release when the shared collection differs from the pins.
+      Pass --allow-drift to release when the shared collection or compiler differs from its pin.
       The tag is annotated with those subjects. Consumers pin it with
       "krs update aws@<tag>". Releases are cut from a clean main only.
     deps: [tasks]

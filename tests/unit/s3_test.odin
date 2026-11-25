@@ -3,6 +3,8 @@ package aws
 import network_client "shared:surf"
 import tls "shared:async/tls"
 import "core:bytes"
+import "core:crypto/hash"
+import "core:encoding/hex"
 import "core:fmt"
 import "core:mem"
 import "core:os"
@@ -296,6 +298,14 @@ s3_exact_presign_time_and_global_endpoint_fixture :: proc(t: ^testing.T) {
 	)
 	_, invalid := s3_download_url(config, credentials, "test.txt", 604801, now)
 	testing.expect(t, !invalid)
+	for expires in ([]int{0, -1}) {
+		_, refused := s3_download_url(config, credentials, "test.txt", expires, now)
+		testing.expectf(t, !refused, "%d", expires)
+	}
+	for expires in ([]int{1, 604800}) {
+		_, accepted := s3_download_url(config, credentials, "test.txt", expires, now)
+		testing.expectf(t, accepted, "%d", expires)
+	}
 }
 
 // Expected signatures independently calculated with Python hashlib/hmac.
@@ -1050,4 +1060,120 @@ a_file_upload_without_its_digest_is_not_sent :: proc(t: ^testing.T) {
 	)
 	testing.expect(t, !result.ok)
 	testing.expect_value(t, s3_sent.method, "")
+}
+
+S3_Validation_Count :: struct {
+	calls:       int,
+	upload_size: i64,
+	digest:      string,
+}
+
+// Written only by tests that hold aws_test_http_mutex.
+s3_validation_count: S3_Validation_Count
+
+s3_validation_http :: proc(request: HTTP_Request) -> ([]u8, network_client.Buffered_HTTP_Result) {
+	s3_validation_count.calls += 1
+	s3_validation_count.upload_size = request.upload_size
+	for header in request.headers {
+		if strings.has_prefix(header, "x-amz-content-sha256: ") {
+			s3_validation_count.digest = strings.clone(header[len("x-amz-content-sha256: "):], context.temp_allocator)
+		}
+	}
+	return nil, {status = 200, ok = true, transport_ok = true}
+}
+
+@(test)
+s3_config_refuses_buckets_and_regions_that_would_change_the_host :: proc(t: ^testing.T) {
+	sync.mutex_lock(&aws_test_http_mutex)
+	defer sync.mutex_unlock(&aws_test_http_mutex)
+	context.allocator = context.temp_allocator
+	long_ok := strings.repeat("a", 63)
+	long_bad := strings.repeat("a", 64)
+	required :: "S3 requires AWS_S3_BUCKET and AWS_REGION"
+	for item in ([]struct {
+			bucket, region, expected: string,
+		} {
+			{"", "us-east-1", ""},
+			{"abc", "us-east-1", ""},
+			{long_ok, "us-east-1", ""},
+			{"my-bucket.v2", "us-east-1", ""},
+			{"ab", "us-east-1", required},
+			{long_bad, "us-east-1", required},
+			{"abc", "", required},
+			{"Abc", "us-east-1", "Invalid S3 bucket name"},
+			{"my_bucket", "us-east-1", "Invalid S3 bucket name"},
+			{"my/bucket", "us-east-1", "Invalid S3 bucket name"},
+			{"my bucket", "us-east-1", "Invalid S3 bucket name"},
+			{"abc", "US-EAST-1", "Invalid AWS region"},
+			{"abc", "us.east.1", "Invalid AWS region"},
+			{"abc", "us-east-1/", "Invalid AWS region"},
+			{"abc", "eu_west_1", "Invalid AWS region"},
+		}) {
+		testing.expectf(
+			t,
+			s3_config_error({bucket = item.bucket, region = item.region}) == item.expected,
+			"%q %q",
+			item.bucket,
+			item.region,
+		)
+	}
+
+	s3_validation_count = {}
+	result := s3_put(
+		{bucket = "abc", region = "us-east-1/"},
+		AWS_Credentials{"fixture-key", "fixture-secret", ""},
+		"key",
+		nil,
+		"text/plain",
+		http_execute = s3_validation_http,
+	)
+	testing.expect_value(t, result, S3_Result{})
+	testing.expect_value(t, s3_validation_count.calls, 0)
+}
+
+@(test)
+s3_put_file_hashes_files_larger_than_its_buffer :: proc(t: ^testing.T) {
+	sync.mutex_lock(&aws_test_http_mutex)
+	defer sync.mutex_unlock(&aws_test_http_mutex)
+	s3_observer_record = {}
+	s3_observer_set(s3_observer_test_observe)
+	defer s3_observer_set(nil)
+
+	SIZE :: 200000
+	data := make([]byte, SIZE)
+	defer delete(data)
+	for &item, index in data {
+		item = byte(index % 251)
+	}
+	digest: [32]byte
+	hash.hash(.SHA256, data, digest[:])
+	expected := hex.encode(digest[:])
+	defer delete(expected)
+
+	directory, error := os.make_directory_temp("", "aws-upload-*", context.allocator)
+	if !testing.expect(t, error == nil) {
+		return
+	}
+	defer delete(directory)
+	defer os.remove(directory)
+	path := fmt.aprintf("%s/body", directory)
+	defer delete(path)
+	defer os.remove(path)
+	testing.expect(t, os.write_entire_file(path, data) == nil)
+
+	credentials := AWS_Credentials{"fixture-key", "fixture-secret", ""}
+	config := S3_Config{bucket = "examplebucket", region = "us-east-1"}
+	s3_validation_count = {}
+	result := s3_put_file(config, credentials, "big", path, "text/plain", http_execute = s3_validation_http)
+	testing.expect(t, result.ok)
+	testing.expect_value(t, s3_validation_count.calls, 1)
+	testing.expect_value(t, s3_validation_count.upload_size, i64(SIZE))
+	testing.expect_value(t, s3_validation_count.digest, string(expected))
+	testing.expect_value(t, s3_observer_record.calls, 1)
+
+	s3_validation_count = {}
+	result = s3_put_file(config, credentials, "big", "/nonexistent/file", "text/plain", http_execute = s3_validation_http)
+	testing.expect_value(t, result, S3_Result{})
+	testing.expect_value(t, s3_validation_count.calls, 0)
+	testing.expect_value(t, s3_observer_record.calls, 1)
 }

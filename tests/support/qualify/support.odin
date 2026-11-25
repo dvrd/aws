@@ -23,6 +23,8 @@ Test :: struct {
 	status:      i64,
 	kind:        string,
 	captures:    int,
+	// The last credential export a fake capture returned, to check it is wiped.
+	exported:    []u8,
 }
 
 ACCOUNT :: "123456789012"

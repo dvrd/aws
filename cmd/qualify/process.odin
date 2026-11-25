@@ -1,9 +1,19 @@
 package main
 
 import "core:c"
+import "core:mem"
 import "core:strings"
 import "core:sys/posix"
 import "core:time"
+
+// Zeroes the NAME=value strings built for a child; the parent no longer needs them.
+variables_wipe :: proc(variables: []cstring) {
+	for variable in variables {
+		if variable != nil {
+			mem.zero_explicit(rawptr(variable), len(string(variable)))
+		}
+	}
+}
 
 // Runs one child in its own session with only the given environment, no input and
 // no error stream, and returns its exit code and at most limit bytes of output.
@@ -35,19 +45,23 @@ capture_child :: proc(
 	append(&variables, nil)
 
 	if deadline - runner.monotonic(runner) <= 0 {
+		variables_wipe(variables[:])
 		return 0, nil, .Child_Deadline
 	}
 	null := posix.open("/dev/null", {.RDWR})
 	if null < 0 {
+		variables_wipe(variables[:])
 		return 0, nil, .System
 	}
 	channel: [2]posix.FD
 	if posix.pipe(&channel) != .OK {
+		variables_wipe(variables[:])
 		posix.close(null)
 		return 0, nil, .System
 	}
 	child := posix.fork()
 	if child < 0 {
+		variables_wipe(variables[:])
 		posix.close(null)
 		posix.close(channel[0])
 		posix.close(channel[1])
@@ -65,6 +79,8 @@ capture_child :: proc(
 		posix.execve(arguments[0], raw_data(arguments), raw_data(variables))
 		posix._exit(127)
 	}
+	// The child has its own copy of the environment.
+	variables_wipe(variables[:])
 	posix.close(null)
 	posix.close(channel[1])
 	reaped := false

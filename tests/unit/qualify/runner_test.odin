@@ -1,10 +1,13 @@
 package main
 
+import aws "shared:aws"
 import "core:encoding/json"
+import "core:reflect"
 import "core:strings"
 import "core:sys/posix"
 import "core:testing"
 import "core:time"
+import surf "shared:surf"
 
 // Unit tests of cmd/qualify/runner.odin: plan, the run state machine, receipts,
 // credential checks and expiry instants.
@@ -508,4 +511,25 @@ a_verified_delete_completes_in_one_save :: proc(t: ^testing.T) {
 	saved := document(&test, "state.json")
 	testing.expect_value(t, phase_of(saved), "COMPLETE")
 	testing.expect(t, is_true(saved, "s3_qualified"))
+}
+
+@(test)
+result_tables_follow_the_library_enums :: proc(t: ^testing.T) {
+	cases := []struct {
+		name:  string,
+		table: []string,
+		type:  typeid,
+	} {
+		{"CREDENTIAL_KINDS", CREDENTIAL_KINDS, aws.Credential_Error_Kind},
+		{"S3_KINDS", S3_KINDS, aws.S3_Error},
+		{"SES_KINDS", SES_KINDS, aws.SES_Error},
+		{"EFFECTS", EFFECTS, surf.HTTP_Write_Effect},
+	}
+	for item in cases {
+		names := reflect.enum_field_names(item.type)
+		testing.expectf(t, len(names) == len(item.table), "%s has %d names, the enum %d", item.name, len(item.table), len(names))
+		for name, index in names {
+			testing.expectf(t, index < len(item.table) && item.table[index] == name, "%s[%d] should be %s", item.name, index, name)
+		}
+	}
 }

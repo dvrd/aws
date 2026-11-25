@@ -8,6 +8,7 @@ package main
 import "core:crypto"
 import "core:encoding/hex"
 import "core:encoding/json"
+import "core:os"
 import "core:strings"
 import "core:sys/posix"
 import "core:time"
@@ -452,7 +453,6 @@ plan :: proc(runner: ^Runner) -> (result: json.Object, failure: Failure) {
 		return nil, .Verified_SES_Identity_Required
 	}
 	scope_valid(scope) or_return
-	digest := binary_hash(arguments.binary) or_return
 	lock := lock_acquire(arguments.state_dir) or_return
 	defer lock_release(lock)
 	for name in ([]string{"state.json", "scope.json", "credential-policy.json"}) {
@@ -460,6 +460,8 @@ plan :: proc(runner: ^Runner) -> (result: json.Object, failure: Failure) {
 			return nil, .Run_Already_Exists
 		}
 	}
+	// Only this private copy, made from the bytes that were hashed, is ever run.
+	digest := probe_install(arguments.binary, arguments.state_dir) or_return
 	atomic(arguments.state_dir, "scope.json", scope) or_return
 	_, scope_bytes := read_private_bytes(state_file(runner, "scope.json")) or_return
 	identifier: [16]u8
@@ -469,7 +471,8 @@ plan :: proc(runner: ^Runner) -> (result: json.Object, failure: Failure) {
 	state["run_id"] = string(hex.encode(identifier[:]))
 	state["phase"] = "PREPARED"
 	state["scope_sha256"] = sha256_hex(scope_bytes)
-	state["binary"] = arguments.binary
+	state["binary"] = state_file(runner, PROBE_NAME)
+	state["binary_source"] = arguments.binary
 	state["binary_sha256"] = digest
 	state["allow_ses"] = scope["allow_ses"]
 	state["s3_qualified"] = false
@@ -659,7 +662,7 @@ environment_credentials :: proc(
 executable_find :: proc(runner: ^Runner, name: string) -> string {
 	search, _ := runner.variable(runner, "PATH")
 	for directory in strings.split(search, ":") {
-		if directory == "" {
+		if directory == "" || !os.is_absolute_path(directory) {
 			continue
 		}
 		candidate := strings.concatenate({directory, "/", name})
@@ -672,6 +675,32 @@ executable_find :: proc(runner: ^Runner, name: string) -> string {
 	return ""
 }
 
+// The real path of the AWS CLI, which receives live credentials: an absolute path
+// to a regular, executable file owned by this user or by root that group and
+// others cannot write. A link (such as Homebrew's) is resolved first, and only the
+// resolved file is checked and executed.
+aws_cli_trusted :: proc(path: string) -> (resolved: string, failure: Failure) {
+	if !os.is_absolute_path(path) {
+		return "", .AWS_CLI_Required
+	}
+	real := posix.realpath(strings.clone_to_cstring(path))
+	if real == nil {
+		return "", .AWS_CLI_Required
+	}
+	resolved = strings.clone_from_cstring(real)
+	posix.free(real)
+	name := strings.clone_to_cstring(resolved)
+	info: posix.stat_t
+	if posix.stat(name, &info) != .OK ||
+	   !posix.S_ISREG(info.st_mode) ||
+	   (info.st_uid != posix.geteuid() && info.st_uid != 0) ||
+	   permission_bits(info.st_mode) & 0o022 != 0 ||
+	   posix.access(name, {.X_OK}) != .OK {
+		return "", .AWS_CLI_Required
+	}
+	return resolved, .None
+}
+
 // Default Credential_Loader: asks the AWS CLI for the credentials and checks the
 // account they belong to before anything native starts.
 credentials :: proc(runner: ^Runner, scope: json.Object, deadline: time.Duration) -> (environment: Environment, failure: Failure) {
@@ -682,6 +711,7 @@ credentials :: proc(runner: ^Runner, scope: json.Object, deadline: time.Duration
 	if executable == "" {
 		return {}, .AWS_CLI_Required
 	}
+	executable = aws_cli_trusted(executable) or_return
 	base := make(map[string]string)
 	for name in ([]string{"PATH", "HOME", "USER", "LOGNAME", "LANG", "LC_ALL", "TMPDIR"}) {
 		if value, found := runner.variable(runner, name); found {
@@ -804,6 +834,9 @@ native :: proc(
 	scope_digest, scope_set := text_of(state, "scope_sha256")
 	if !binary_set || !run_set || !scope_set {
 		return nil, .Invalid_Document
+	}
+	if binary != state_file(runner, PROBE_NAME) {
+		return nil, .Run_Binding_Mismatch
 	}
 	_, scope_bytes := read_private_bytes(scope_path) or_return
 	if sha256_hex(scope_bytes) != scope_digest {
@@ -952,6 +985,9 @@ run :: proc(runner: ^Runner) -> (result: json.Object, failure: Failure) {
 	allow_ses, ses_set := boolean_of(state, "allow_ses")
 	if !binary_set || !run_set || !phase_set || !ses_set || "scope_sha256" not_in state || "binary_sha256" not_in state {
 		return nil, .Invalid_Document
+	}
+	if binary != state_file(runner, PROBE_NAME) {
+		return nil, .Run_Binding_Mismatch
 	}
 	if !text_is(state, "scope_sha256", sha256_hex(scope_bytes)) ||
 	   !text_is(state, "binary_sha256", binary_hash(binary) or_return) ||

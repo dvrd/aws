@@ -71,6 +71,10 @@ root_directory :: proc() -> string {
 	return directory
 }
 
+// Vet only this repository's packages. The dependencies are vetted in their own
+// repositories, and surf brings in the whole async root.
+VET_PACKAGES :: "-vet-packages:aws,main"
+
 // A collection with aws from this checkout and the pinned dependencies.
 stage_collection :: proc(work: string) -> (shared: string, ok: bool) {
 	shared = fmt.aprintf("%s/shared", work)

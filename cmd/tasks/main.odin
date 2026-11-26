@@ -121,7 +121,7 @@ command_find :: proc(name: string) -> (Command, bool) {
 
 build_command :: proc(arguments: []string) -> int {
 	command := make([dynamic]string)
-	append(&command, compiler(), "check", "src", "-no-entry-point", "-vet", "-warnings-as-errors")
+	append(&command, compiler(), "check", "src", "-no-entry-point", "-vet", VET_PACKAGES, "-warnings-as-errors")
 	append(&command, fmt.aprintf("-collection:shared=%s", shared_source()))
 	append(&command, ..arguments)
 	return run(command[:], timeout = BUILD_TIMEOUT)

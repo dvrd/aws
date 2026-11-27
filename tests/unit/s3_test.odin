@@ -1,13 +1,10 @@
 package aws
 
 import network_client "shared:surf"
-import "shared:async"
-import tls "shared:async/tls"
 import "core:bytes"
 import "core:crypto/hash"
 import "core:encoding/hex"
 import "core:fmt"
-import "core:io"
 import "core:mem"
 import "core:os"
 import "core:strings"
@@ -93,12 +90,12 @@ S3_Time_Fixture :: struct {
 	method, signature: string,
 	file:              bool,
 	calls:             int,
-	result:            network_client.Buffered_HTTP_Result,
+	result:            HTTP_Result,
 }
 
 s3_time_fixture: ^S3_Time_Fixture
 
-s3_exact_http :: proc(request: HTTP_Request) -> ([]u8, network_client.Buffered_HTTP_Result) {
+s3_exact_http :: proc(request: HTTP_Request) -> ([]u8, HTTP_Result) {
 	s := s3_time_fixture
 	s.calls += 1
 	testing.expect_value(s.t, request.method, s.method)
@@ -400,7 +397,7 @@ s3_sent_record :: proc(method, url: string, headers: []string) {
 	}
 }
 
-s3_sent_http :: proc(request: HTTP_Request) -> ([]u8, network_client.Buffered_HTTP_Result) {
+s3_sent_http :: proc(request: HTTP_Request) -> ([]u8, HTTP_Result) {
 	s3_sent_record(request.method, request.url, request.headers)
 	return nil, {status = 200, ok = true}
 }
@@ -1022,7 +1019,7 @@ S3_Validation_Count :: struct {
 // Written only by tests that hold aws_test_http_mutex.
 s3_validation_count: S3_Validation_Count
 
-s3_validation_http :: proc(request: HTTP_Request) -> ([]u8, network_client.Buffered_HTTP_Result) {
+s3_validation_http :: proc(request: HTTP_Request) -> ([]u8, HTTP_Result) {
 	s3_validation_count.calls += 1
 	s3_validation_count.upload_size = request.upload_size
 	for header in request.headers {
@@ -1146,7 +1143,7 @@ S3_Timeout_Probe :: struct {
 
 s3_timeout_probe: S3_Timeout_Probe
 
-s3_timeout_http :: proc(request: HTTP_Request) -> ([]u8, network_client.Buffered_HTTP_Result) {
+s3_timeout_http :: proc(request: HTTP_Request) -> ([]u8, HTTP_Result) {
 	s3_timeout_probe.calls += 1
 	s3_timeout_probe.timeout_ms = request.timeout_ms
 	return nil, {status = 200, ok = true, transport_ok = true}
@@ -1199,13 +1196,13 @@ put_timeout_follows_body_size :: proc(t: ^testing.T) {
 
 S3_Outcome_Fixture :: struct {
 	calls:  int,
-	result: network_client.Buffered_HTTP_Result,
+	result: HTTP_Result,
 }
 
 // Written only by tests that hold aws_test_http_mutex.
 s3_outcome_fixture: ^S3_Outcome_Fixture
 
-s3_outcome_http :: proc(request: HTTP_Request) -> ([]u8, network_client.Buffered_HTTP_Result) {
+s3_outcome_http :: proc(request: HTTP_Request) -> ([]u8, HTTP_Result) {
 	s3_outcome_fixture.calls += 1
 	return nil, s3_outcome_fixture.result
 }
@@ -1221,7 +1218,7 @@ put_and_delete_report_typed_outcomes :: proc(t: ^testing.T) {
 	defer s3_outcome_fixture = nil
 
 	Case :: struct {
-		answer: network_client.Buffered_HTTP_Result,
+		answer: HTTP_Result,
 		want:   S3_Result,
 	}
 	cases := []Case {
@@ -1233,7 +1230,7 @@ put_and_delete_report_typed_outcomes :: proc(t: ^testing.T) {
 		{{status = 200, ok = false}, {200, false, .Unavailable, .Response_Received}},
 		{{status = 0, error = {kind = .IO_Failed, write_effect = .Unknown}}, {0, false, .Unavailable, .Unknown}},
 		{{status = 0, error = {kind = .Invalid_Config, write_effect = .Not_Sent}}, {0, false, .Invalid_Input, .Not_Sent}},
-		{{status = 0, error = {kind = .TLS_Failed, tls_error = tls.Protocol_Error.Unknown_Ca, write_effect = .Not_Sent}}, {0, false, .Rejected, .Not_Sent}},
+		{{status = 0, error = {kind = .TLS_Failed, tls_error = .Unknown_CA, write_effect = .Not_Sent}}, {0, false, .Rejected, .Not_Sent}},
 		{{status = 0}, {0, false, .Unavailable, .Unknown}},
 	}
 	for c in cases {
@@ -1368,12 +1365,12 @@ s3_transport_errors_say_whether_to_retry :: proc(t: ^testing.T) {
 		{{kind = .Invalid_Redirect}, .Rejected},
 		{{kind = .Unsafe_Redirect}, .Rejected},
 		{{kind = .Body_Oversized, status = 200}, .Too_Large},
-		{{kind = .TLS_Failed, tls_error = tls.Protocol_Error.Unknown_Ca}, .Rejected},
-		{{kind = .TLS_Failed, tls_error = tls.Protocol_Error.Certificate_Expired}, .Rejected},
-		{{kind = .TLS_Failed, tls_error = async.TLS_General_Error.Invalid_Trust_Roots}, .Invalid_Input},
-		{{kind = .TLS_Failed, tls_error = async.TLS_General_Error.Invalid_SNI_Hostname}, .Invalid_Input},
-		{{kind = .TLS_Failed, tls_error = io.Error.Unexpected_EOF}, .Unavailable},
-		{{kind = .TLS_Failed, tls_error = tls.Protocol_Error.Close_Notify}, .Unavailable},
+		{{kind = .TLS_Failed, tls_error = .Unknown_CA}, .Rejected},
+		{{kind = .TLS_Failed, tls_error = .Certificate_Expired}, .Rejected},
+		{{kind = .TLS_Failed, tls_error = .Invalid_Trust_Roots}, .Invalid_Input},
+		{{kind = .TLS_Failed, tls_error = .Invalid_Server_Name}, .Invalid_Input},
+		{{kind = .TLS_Failed, tls_error = .Transport}, .Unavailable},
+		{{kind = .TLS_Failed, tls_error = .Close_Notify}, .Unavailable},
 		{{kind = .TLS_Failed}, .Unavailable},
 		{{kind = .Dial_Failed}, .Unavailable},
 		{{kind = .IO_Failed}, .Unavailable},

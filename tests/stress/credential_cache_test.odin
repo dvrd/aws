@@ -28,7 +28,7 @@ credential_stress_clock :: proc(data: rawptr) -> time.Time {
 	return time.unix(sync.atomic_load(&(cast(^Credential_Stress)data).now), 0)
 }
 
-credential_stress_http :: proc(request: HTTP_Request) -> ([]u8, network_client.Buffered_HTTP_Result) {
+credential_stress_http :: proc(request: HTTP_Request) -> ([]u8, HTTP_Result) {
 	state := credential_stress
 	generation := sync.atomic_add(&state.generation, 1)
 	// Every document expires one hour after the moment it was fetched.

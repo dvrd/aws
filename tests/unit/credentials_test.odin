@@ -83,7 +83,7 @@ Credential_Test_HTTP :: struct {
 
 credential_test_http_state: ^Credential_Test_HTTP
 
-credential_test_http :: proc(request: HTTP_Request) -> ([]u8, network_client.Buffered_HTTP_Result) {
+credential_test_http :: proc(request: HTTP_Request) -> ([]u8, HTTP_Result) {
 	state := credential_test_http_state
 	state.calls += 1
 	if !request.allow_http ||
@@ -934,7 +934,7 @@ credential_test_bad_token_calls: int
 @(test)
 credential_scratch_holds_the_largest_resolution :: proc(t: ^testing.T) {
 	// Copies every reply into context.temp_allocator, as Surf's buffered client does.
-	copying :: proc(request: HTTP_Request) -> ([]u8, network_client.Buffered_HTTP_Result) {
+	copying :: proc(request: HTTP_Request) -> ([]u8, HTTP_Result) {
 		reply := ""
 		switch {
 		case request.method == "PUT" && request.url == "http://169.254.169.254/latest/api/token":
@@ -1104,7 +1104,7 @@ credential_documents_with_fractional_expiry_are_cached :: proc(t: ^testing.T) {
 
 @(test)
 credential_replies_of_the_default_executor_are_erased :: proc(t: ^testing.T) {
-	other :: proc(request: HTTP_Request) -> ([]u8, network_client.Buffered_HTTP_Result) {
+	other :: proc(request: HTTP_Request) -> ([]u8, HTTP_Result) {
 		return nil, {}
 	}
 	reply := [6]u8{'s', 'e', 'c', 'r', 'e', 't'}
@@ -1435,7 +1435,7 @@ metadata_text_is_printable_before_it_reaches_a_url_or_header :: proc(t: ^testing
 	credential_test_absent(directory)
 	testing.expect(t, os.unset_env("AWS_EC2_METADATA_DISABLED"))
 	// An IMDS token with a control character never becomes a header.
-	bad_token :: proc(request: HTTP_Request) -> ([]u8, network_client.Buffered_HTTP_Result) {
+	bad_token :: proc(request: HTTP_Request) -> ([]u8, HTTP_Result) {
 		sync.atomic_add(&credential_test_bad_token_calls, 1)
 		return transmute([]u8)string("imds\ttoken"), {ok = true, status = 200}
 	}
@@ -2183,4 +2183,61 @@ refresher_stops_while_a_refresh_is_blocked :: proc(t: ^testing.T) {
 	testing.expect(t, refresher.thread == nil)
 	testing.expect_value(t, http.calls, 1)
 	testing.expect_value(t, credential_cache_destroy(&cache).kind, Credential_Error_Kind.None)
+}
+
+// Requests http_execute_default refuses before anything is dialed.
+@(test)
+http_execute_default_refuses_before_dialing :: proc(t: ^testing.T) {
+	cases := []struct {
+		request: HTTP_Request,
+		kind:    network_client.HTTP_Error_Kind,
+	} {
+		{{method = "GET", url = "http://127.0.0.1:9/", timeout_ms = 1000}, .Insecure_URL},
+		{{method = "GET", url = "ftp://127.0.0.1/", timeout_ms = 1000}, .Invalid_URL},
+		{{method = "G ET", url = "https://127.0.0.1:9/", timeout_ms = 1000}, .Invalid_Method},
+		{{method = "BREW", url = "https://127.0.0.1:9/", timeout_ms = 1000}, .Invalid_Method},
+		{{method = "GET", url = "https://127.0.0.1:9/", timeout_ms = 0}, .Invalid_Config},
+		{{method = "GET", url = "https://127.0.0.1:9/", timeout_ms = 120001}, .Invalid_Config},
+		{{method = "PUT", url = "https://127.0.0.1:9/", timeout_ms = 1000, upload_size = -1}, .Invalid_Config},
+		{{method = "GET", url = "https://127.0.0.1:9/", timeout_ms = 1000, headers = {"X-A: 1\r\n"}}, .Invalid_Header},
+		{{method = "GET", url = "https://127.0.0.1:9/", timeout_ms = 1000, headers = {"X A: 1"}}, .Invalid_Header},
+	}
+
+	for c in cases {
+		data, result := http_execute_default(c.request)
+		testing.expect(t, data == nil)
+		testing.expect_value(t, result.error.kind, c.kind)
+		testing.expect_value(t, result.error.phase, network_client.HTTP_Phase.Configuration)
+		testing.expect_value(t, result.error.write_effect, network_client.HTTP_Write_Effect.Not_Sent)
+		testing.expect(t, !result.ok && !result.transport_ok && result.status == 0)
+	}
+
+	_, missing := http_execute_default(
+		{method = "GET", url = "https://127.0.0.1:9/", timeout_ms = 1000, ca_file = "/nonexistent/aws-ca.pem"},
+	)
+	testing.expect_value(t, missing.error.kind, network_client.HTTP_Error_Kind.TLS_Failed)
+	testing.expect_value(t, missing.error.phase, network_client.HTTP_Phase.TLS)
+	testing.expect_value(t, missing.error.write_effect, network_client.HTTP_Write_Effect.Not_Sent)
+}
+
+// curl's header lines: "Name: value" sends, "Name:" suppresses, "Name;" sends
+// empty, anything else is ignored.
+@(test)
+http_header_lines_follow_curl :: proc(t: ^testing.T) {
+	name, value, suppress, present := http_header_line("X-Trace:  a b \t")
+	testing.expect(t, name == "X-Trace" && value == "a b" && !suppress && present)
+	name, value, suppress, present = http_header_line("Accept:")
+	testing.expect(t, name == "Accept" && value == "" && suppress && present)
+	name, value, suppress, present = http_header_line("X-Empty;")
+	testing.expect(t, name == "X-Empty" && value == "" && !suppress && present)
+	_, _, _, present = http_header_line("no separator")
+	testing.expect(t, !present)
+
+	for token in ([]string{"GET", "POST", "PATCH", "HEAD", "PUT", "DELETE", "OPTIONS"}) {
+		_, known := http_method(token)
+		testing.expect(t, known, token)
+	}
+
+	_, known := http_method("get")
+	testing.expect(t, !known, "methods are case-sensitive")
 }

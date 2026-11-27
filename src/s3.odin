@@ -9,9 +9,6 @@ import "core:os"
 import "core:strings"
 import "core:sync"
 import "core:time"
-import "shared:async"
-// The facade has no name for TLS alerts yet; this import is for Protocol_Error only.
-import tls "shared:async/tls"
 import "shared:surf"
 
 // Without an endpoint the request goes to AWS: https://<bucket>.s3.<region>...,
@@ -915,24 +912,18 @@ s3_transport_error :: proc(failure: surf.HTTP_Error) -> S3_Error {
 	case .Body_Oversized:
 		return .Too_Large
 	case .TLS_Failed:
-		if general, is_general := failure.tls_error.(async.TLS_General_Error); is_general {
-			#partial switch general {
-			case .Invalid_SNI_Hostname, .Invalid_Config, .Invalid_Trust_Roots, .Credential_Failed:
-				return .Invalid_Input
-			}
-		}
-		if protocol, is_protocol := failure.tls_error.(tls.Protocol_Error); is_protocol {
-			#partial switch protocol {
-			case .Bad_Certificate,
-			     .Unsupported_Certificate,
-			     .Certificate_Revoked,
-			     .Certificate_Expired,
-			     .Certificate_Unknown,
-			     .Unknown_Ca,
-			     .Protocol_Version,
-			     .Insufficient_Security:
-				return .Rejected
-			}
+		#partial switch failure.tls_error {
+		case .Invalid_Server_Name, .Invalid_Config, .Invalid_Trust_Roots, .Credential_Failed:
+			return .Invalid_Input
+		case .Bad_Certificate,
+		     .Unsupported_Certificate,
+		     .Certificate_Revoked,
+		     .Certificate_Expired,
+		     .Certificate_Unknown,
+		     .Unknown_CA,
+		     .Protocol_Version,
+		     .Insufficient_Security:
+			return .Rejected
 		}
 		return .Unavailable
 	case .None,
@@ -1082,7 +1073,7 @@ s3_get_native :: proc(
 
 // Gives the caller a body it frees with delete(body, allocator). Surf allocated
 // the body with allocator (no budget scope is configured), so a non-empty body
-// Surf can hand over is taken outright; the slice starts at the allocation, so
+// Surf can hand over is taken outright; its data starts at the allocation, so
 // that delete frees it. An empty body or one Surf cannot hand over is copied.
 // response must still be destroyed afterwards; ok is false when the copy fails.
 @(private)
@@ -1090,7 +1081,7 @@ s3_get_body_take :: proc(response: ^surf.Response, allocator: mem.Allocator) -> 
 	if len(response.body) > 0 {
 		chunk, take_error := surf.response_take_body(response)
 		if take_error.kind == .None {
-			return chunk.storage[:len(chunk.data)], true
+			return chunk.data, true
 		}
 	}
 	copied, allocation_error := make([]u8, len(response.body), allocator)

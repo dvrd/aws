@@ -17,11 +17,11 @@ SES_Capture :: struct {
 	region:  string,
 	execute: aws.HTTP_Execute,
 	data:    rawptr,
-	result:  surf.Buffered_HTTP_Result,
+	result:  aws.HTTP_Result,
 	called:  bool,
 }
 
-ses_capture :: proc(request: aws.HTTP_Request) -> ([]u8, surf.Buffered_HTTP_Result) {
+ses_capture :: proc(request: aws.HTTP_Request) -> ([]u8, aws.HTTP_Result) {
 	capture := cast(^SES_Capture)context.user_ptr
 	endpoint := fmt.aprintf("https://email.%s.amazonaws.com/v2/email/outbound-emails", capture.region)
 	defer delete(endpoint)
@@ -148,7 +148,7 @@ object_read :: proc(
 	return result
 }
 
-effect_of_transport :: proc(value: surf.Buffered_HTTP_Result) -> surf.HTTP_Write_Effect {
+effect_of_transport :: proc(value: aws.HTTP_Result) -> surf.HTTP_Write_Effect {
 	if value.status != 0 {
 		return .Response_Received
 	}

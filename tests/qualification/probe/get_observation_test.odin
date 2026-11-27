@@ -56,7 +56,7 @@ observed_fixture_get :: proc(
 	copy(body, transmute([]u8)text)
 	return body, status, .None
 }
-observed_fixture_write :: proc(_: aws.HTTP_Request) -> ([]u8, surf.Buffered_HTTP_Result) {
+observed_fixture_write :: proc(_: aws.HTTP_Request) -> ([]u8, aws.HTTP_Result) {
 	s := cast(^Observed_Fixture)context.user_ptr
 	s.writes += 1
 	return nil, {}

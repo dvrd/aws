@@ -320,7 +320,9 @@ suites_find :: proc(root, selected: string, homes: []Home) -> []Suite {
 repository_stage :: proc(root, repository: string) -> bool {
 	listing, code := output({"git", "-C", root, "ls-files", "--cached", "--others", "--exclude-standard", "-z"})
 	if code != 0 {
-		return copy_tree(root, repository)
+		// Not a Git checkout, such as the export the pre-push hook tests: copy
+		// everything but .git, since .krs/packages.json is hidden.
+		return copy_tree(root, repository, hidden = true)
 	}
 	for relative in strings.split(listing, "\x00") {
 		source := fmt.aprintf("%s/%s", root, relative)

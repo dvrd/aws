@@ -349,19 +349,20 @@ directory_ensure :: proc(path: string) -> bool {
 }
 
 // Copies the non-hidden files of a directory tree.
-copy_tree :: proc(source, target: string) -> bool {
+copy_tree :: proc(source, target: string, hidden := false) -> bool {
 	directory_ensure(target) or_return
 	entries, error := os.read_all_directory_by_path(source, context.allocator)
 	if error != nil {
 		return false
 	}
 	for entry in entries {
-		if strings.has_prefix(entry.name, ".") {
+		// .git is never copied; other hidden entries only when asked for.
+		if entry.name == ".git" || !hidden && strings.has_prefix(entry.name, ".") {
 			continue
 		}
 		destination := fmt.aprintf("%s/%s", target, entry.name)
 		if os.is_directory(entry.fullpath) {
-			copy_tree(entry.fullpath, destination) or_return
+			copy_tree(entry.fullpath, destination, hidden) or_return
 		} else if os.copy_file(destination, entry.fullpath) != nil {
 			return false
 		}

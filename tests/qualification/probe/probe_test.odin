@@ -1,7 +1,6 @@
 package main
 
 import aws "shared:aws"
-import surf "shared:surf"
 import "core:mem"
 import "core:strings"
 import "core:testing"

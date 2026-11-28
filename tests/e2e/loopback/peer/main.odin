@@ -36,7 +36,7 @@ main :: proc() {
 
 	for used < len(hello) {
 		n, received := net.recv_tcp(socket, hello[used:])
-		assert(received == .None && n > 0)
+		assert(received == .None && n > 0, fmt.tprintf("recv %v n=%d used=%d after %v", received, n, used, time.tick_since(started)))
 		used += n
 	}
 

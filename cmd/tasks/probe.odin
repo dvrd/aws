@@ -31,6 +31,7 @@ probe_command :: proc(arguments: []string) -> int {
 		QUALIFICATION_PROBE,
 		fmt.aprintf("-collection:shared=%s", shared),
 		"-vet",
+		VET_PACKAGES,
 		"-warnings-as-errors",
 		fmt.aprintf("-out:%s", output),
 	}

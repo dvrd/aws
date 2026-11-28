@@ -1,7 +1,6 @@
 package main
 
 import aws "shared:aws"
-import surf "shared:surf"
 import "core:encoding/json"
 import "core:mem"
 import "core:strings"
@@ -50,7 +49,7 @@ aws_fault_get :: proc(
 	copy(body, transmute([]u8)owned)
 	return body, 200, .None
 }
-aws_fault_write :: proc(request: aws.HTTP_Request) -> ([]u8, surf.Buffered_HTTP_Result) {
+aws_fault_write :: proc(request: aws.HTTP_Request) -> ([]u8, aws.HTTP_Result) {
 	fault := cast(^AWS_Qualification_Fault)context.user_ptr
 	fault.writes += 1
 	testing.expect(fault.t, !request.allow_http && request.timeout_ms <= 15000)

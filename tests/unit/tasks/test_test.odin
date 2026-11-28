@@ -168,3 +168,27 @@ ignored_files_are_neither_suites_nor_sources :: proc(t: ^testing.T) {
 	}
 	testing.expect_value(t, len(layout_problems(repository, homes)), 0)
 }
+
+@(test)
+a_checkout_outside_git_is_staged_with_its_hidden_files :: proc(t: ^testing.T) {
+	context.allocator = context.temp_allocator
+	root := checkout_make(
+		t,
+		{
+			{".krs/packages.json", "{}\n"},
+			{".gitignore", "build/\n"},
+			{".git/config", "not a repository\n"},
+			{"src/s3.odin", "package aws\n"},
+		},
+	)
+	defer os.remove_all(root)
+	staged, created := work_directory("tasks-stage")
+	testing.expect(t, created)
+	defer os.remove_all(staged)
+	repository := fmt.aprintf("%s/repository", staged)
+	testing.expect(t, repository_stage(root, repository))
+	testing.expect_value(t, read_text(fmt.aprintf("%s/.krs/packages.json", repository)), "{}\n")
+	testing.expect(t, os.is_file(fmt.aprintf("%s/.gitignore", repository)))
+	testing.expect(t, os.is_file(fmt.aprintf("%s/src/s3.odin", repository)))
+	testing.expect(t, !os.exists(fmt.aprintf("%s/.git", repository)))
+}

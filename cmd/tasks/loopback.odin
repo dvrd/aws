@@ -7,7 +7,7 @@ import "core:strconv"
 import "core:strings"
 import "core:time"
 
-SANITIZED_FLAGS :: []string{"-thread-count:1", "-vet", "-warnings-as-errors", "-sanitize:address"}
+SANITIZED_FLAGS :: []string{"-thread-count:1", "-vet", VET_PACKAGES, "-warnings-as-errors", "-sanitize:address"}
 
 LOOPBACK_PEER :: "tests/e2e/loopback/peer"
 LOOPBACK_DEFAULT_PROBE :: "tests/e2e/loopback/production_get_probe"

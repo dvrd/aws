@@ -8,6 +8,7 @@ import "core:strings"
 import "core:sync"
 import "core:thread"
 import "core:time"
+import "shared:async"
 import "shared:surf"
 
 // Two ways to obtain credentials:
@@ -1355,7 +1356,7 @@ credential_profile_load :: proc(
 
 // Optional per-operation seam for isolated providers and offline tests. Defaults
 // use Surf; implementations must preserve its bounded response/trust contract.
-HTTP_Execute :: proc(request: HTTP_Request) -> ([]u8, surf.Buffered_HTTP_Result)
+HTTP_Execute :: proc(request: HTTP_Request) -> ([]u8, HTTP_Result)
 
 // One buffered request. Optional upload_file streams upload_size bytes instead of body.
 HTTP_Request :: struct {
@@ -1369,22 +1370,185 @@ HTTP_Request :: struct {
 	upload_size: i64,
 }
 
-// Default HTTP_Execute: Surf's buffered client.
-http_execute_default :: proc(
-	request: HTTP_Request,
-) -> (
-	[]u8,
-	surf.Buffered_HTTP_Result,
-) {
-	return surf.buffered_http_execute(
-		request.method,
-		request.url,
-		request.body,
-		request.headers,
-		request.ca_file,
-		request.allow_http,
-		request.timeout_ms,
-		request.upload_file,
-		request.upload_size,
-	)
+// A complete HTTP response can be non-2xx without a transport failure.
+HTTP_Result :: struct {
+	status:       int,
+	ok:           bool,
+	transport_ok: bool,
+	error:        surf.HTTP_Error,
+}
+
+// The largest response body http_execute_default returns.
+HTTP_RESPONSE_LIMIT :: 64 * 1024
+
+// Default HTTP_Execute, over surf.execute. No redirects or proxies. The response
+// body is returned in context.temp_allocator, at most HTTP_RESPONSE_LIMIT bytes.
+http_execute_default :: proc(request: HTTP_Request) -> ([]u8, HTTP_Result) {
+	if failure := http_request_validate(request); failure.kind != .None {
+		return nil, {error = failure}
+	}
+	target := request.url
+	// A fragment never goes on the wire.
+	if hash := strings.index_byte(target, '#'); hash >= 0 {
+		target = target[:hash]
+	}
+	parsed, parse_error := async.http_url_parse(target)
+	if parse_error.kind != .None {
+		return nil, {error = http_refused(surf.http_error_kind(parse_error.kind))}
+	}
+	method, known := http_method(request.method)
+	if !known {
+		return nil, {error = http_refused(.Invalid_Method)}
+	}
+	fields, allocation := make([]surf.Header, len(request.headers), context.temp_allocator)
+	if allocation != nil {
+		return nil, {error = http_allocation_error(allocation)}
+	}
+	count := 0
+	for header in request.headers {
+		name, value, suppress, present := http_header_line(header)
+		if !present || suppress {
+			continue
+		}
+		if !async.http_header_name_valid(name) || !async.http_header_value_valid(value) {
+			return nil, {error = http_refused(.Invalid_Header)}
+		}
+		fields[count] = {name = name, value = value}
+		count += 1
+	}
+	// Only PUT and POST carry the body, and an upload file replaces it.
+	payload := request.body
+	if request.upload_file != nil || (method != .PUT && method != .POST) {
+		payload = nil
+	}
+	timeout := time.Duration(request.timeout_ms) * time.Millisecond
+	config := surf.Config {
+		timeout       = timeout,
+		setup_timeout = min(timeout, 5 * time.Second),
+		allow_http    = !parsed.secure,
+		max_body_size = HTTP_RESPONSE_LIMIT,
+	}
+	// Kept until this procedure returns.
+	roots: ^surf.Trust_Roots
+	defer if roots != nil {
+		surf.trust_roots_destroy(roots)
+		free(roots)
+	}
+	if request.ca_file != "" {
+		allocated, roots_error := new(surf.Trust_Roots)
+		if roots_error != nil {
+			return nil, {error = http_allocation_error(roots_error)}
+		}
+		roots = allocated
+		if surf.trust_roots_load_file(roots, request.ca_file) != .None {
+			return nil, {error = {kind = .TLS_Failed, phase = .TLS, write_effect = .Not_Sent}}
+		}
+		config.tls.roots = roots
+	}
+	call := surf.Request {
+		method  = method,
+		url     = target,
+		headers = fields[:count],
+		body    = payload,
+	}
+	response: surf.Response
+	error: surf.HTTP_Error
+	if request.upload_file != nil {
+		source := surf.Upload_Source {
+			stream         = os.to_stream(request.upload_file),
+			content_length = request.upload_size,
+		}
+		response, error = surf.execute_upload(call, source, config)
+	} else {
+		response, error = surf.execute(call, config)
+	}
+	defer surf.response_destroy(&response)
+	if error.kind != .None {
+		return nil, {status = error.status, error = error}
+	}
+	result := HTTP_Result {
+		status       = response.status,
+		ok           = response.status >= 200 && response.status < 300,
+		transport_ok = true,
+	}
+	data, copy_error := make([]u8, len(response.body), context.temp_allocator)
+	if copy_error != nil {
+		result.ok, result.transport_ok = false, false
+		result.error = {
+			kind         = .Allocation_Failed,
+			phase        = .Read,
+			allocation   = copy_error,
+			status       = result.status,
+			write_effect = .Response_Received,
+		}
+		return nil, result
+	}
+	copy(data, response.body)
+	return data, result
+}
+
+// The checks made before anything else: URL and scheme, method token, timeout
+// and upload size, and header lines free of CR, LF and NUL.
+http_request_validate :: proc(request: HTTP_Request) -> surf.HTTP_Error {
+	parsed, parse_error := async.http_url_parse(request.url)
+	if parse_error.kind != .None {
+		return http_refused(surf.http_error_kind(parse_error.kind))
+	}
+	if !request.allow_http && !parsed.secure {
+		return http_refused(.Insecure_URL)
+	}
+	if !async.http_header_name_valid(request.method) {
+		return http_refused(.Invalid_Method)
+	}
+	if request.timeout_ms <= 0 || request.timeout_ms > 120000 || request.upload_size < 0 {
+		return http_refused(.Invalid_Config)
+	}
+	for header in request.headers {
+		if strings.contains_any(header, "\r\n\x00") {
+			return http_refused(.Invalid_Header)
+		}
+	}
+	return {}
+}
+
+http_refused :: proc(kind: surf.HTTP_Error_Kind) -> surf.HTTP_Error {
+	return {kind = kind, phase = .Configuration, write_effect = .Not_Sent}
+}
+
+http_allocation_error :: proc(error: mem.Allocator_Error) -> surf.HTTP_Error {
+	return {kind = .Allocation_Failed, phase = .Configuration, write_effect = .Not_Sent, allocation = error}
+}
+
+http_method :: proc(method: string) -> (surf.Method, bool) {
+	switch method {
+	case "GET":
+		return .GET, true
+	case "POST":
+		return .POST, true
+	case "PATCH":
+		return .PATCH, true
+	case "HEAD":
+		return .HEAD, true
+	case "PUT":
+		return .PUT, true
+	case "DELETE":
+		return .DELETE, true
+	case "OPTIONS":
+		return .OPTIONS, true
+	}
+	return {}, false
+}
+
+// curl's header syntax: "Name: value" sends a field, "Name:" suppresses it,
+// "Name;" sends it empty, and a line with neither is ignored.
+http_header_line :: proc(header: string) -> (name, value: string, suppress, present: bool) {
+	if colon := strings.index_byte(header, ':'); colon >= 0 {
+		value = strings.trim(header[colon + 1:], " \t")
+		return header[:colon], value, value == "", true
+	}
+	semi := strings.index_byte(header, ';')
+	if semi < 0 {
+		return
+	}
+	return header[:semi], "", false, true
 }

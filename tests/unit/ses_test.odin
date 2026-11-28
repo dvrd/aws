@@ -67,7 +67,7 @@ SES_Validation :: struct {
 // Written only by tests that hold aws_test_http_mutex.
 ses_validation: SES_Validation
 
-ses_validation_http :: proc(request: HTTP_Request) -> ([]u8, network_client.Buffered_HTTP_Result) {
+ses_validation_http :: proc(request: HTTP_Request) -> ([]u8, HTTP_Result) {
 	ses_validation.calls += 1
 	for line in request.headers {
 		if strings.has_prefix(line, "x-amz-security-token: ") {
@@ -176,7 +176,7 @@ ses_hardening: SES_Hardening
 
 ses_hardening_mutex: sync.Mutex
 
-ses_hardening_http :: proc(request: HTTP_Request) -> ([]u8, network_client.Buffered_HTTP_Result) {
+ses_hardening_http :: proc(request: HTTP_Request) -> ([]u8, HTTP_Result) {
 	for line in request.headers {
 		if strings.has_prefix(line, "x-amz-date: ") {
 			ses_hardening.date = strings.clone(line[len("x-amz-date: "):], context.temp_allocator)

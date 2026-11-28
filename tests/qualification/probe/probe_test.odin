@@ -1,7 +1,6 @@
 package main
 
 import aws "shared:aws"
-import surf "shared:surf"
 import "core:mem"
 import "core:strings"
 import "core:testing"
@@ -62,7 +61,7 @@ fixture_get :: proc(
 	return body, 200, .None
 }
 
-fixture_write :: proc(request: aws.HTTP_Request) -> ([]u8, surf.Buffered_HTTP_Result) {
+fixture_write :: proc(request: aws.HTTP_Request) -> ([]u8, aws.HTTP_Result) {
 	fixture := cast(^Fixture)context.user_ptr
 	testing.expect(fixture.t, request.ca_file == "" && !request.allow_http && request.timeout_ms <= 15000)
 	testing.expect(fixture.t, request.upload_file == nil && request.upload_size == 0)

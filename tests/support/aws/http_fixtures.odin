@@ -21,7 +21,7 @@ aws_test_http_mutex: sync.Mutex
 
 aws_test_http_state: ^AWS_Test_HTTP
 
-aws_test_http :: proc(request: HTTP_Request) -> ([]u8, network_client.Buffered_HTTP_Result) {
+aws_test_http :: proc(request: HTTP_Request) -> ([]u8, HTTP_Result) {
 	state := aws_test_http_state
 	state.calls += 1
 	testing.expect_value(state.t, request.method, state.method)

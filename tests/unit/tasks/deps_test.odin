@@ -73,7 +73,7 @@ data :: #load("data.bin")
 recorded_pins_have_names_and_sha256_hashes :: proc(t: ^testing.T) {
 	context.allocator = context.temp_allocator
 	pins, ok := pins_read(".")
-	names := []string{"async", "surf", "websocket"}
+	names := []string{"async", "surf"}
 	if !testing.expect(t, ok && len(pins) == len(names)) {
 		return
 	}

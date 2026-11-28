@@ -4,23 +4,16 @@
     {
       "name": "async",
       "source": "https://github.com/dvrd/async.git",
-      "tag": "v0.3.1",
-      "commit": "5573991e43a6d8689b57a0377413763bd1cb36e0",
-      "hash": "1c2aabc5c9806eccdfc02241bb2441eb337de3d39e791c173f0eba5e09ef8172"
+      "tag": "v0.5.0",
+      "commit": "8580fd745c2b2dcb25deee13e1077e0c19a9fcf8",
+      "hash": "50c6e40d3c3f0aec85fd91a3f5be003162b24e9a990ca014a5827cd907eaf951"
     },
     {
       "name": "surf",
       "source": "https://github.com/dvrd/surf.git",
-      "tag": "v0.1.4",
-      "commit": "8a3cc55b9ee42b040b55cf30bd25fcd9a2ddc714",
-      "hash": "45b5f8a133a32909c32df90d8c6a9e00a2c5bd47fa07dc9b048b1fa0e53d0280"
-    },
-    {
-      "name": "websocket",
-      "source": "local",
-      "tag": "v0.1.2",
-      "commit": "18cf35aef3d5dcd6f75d36a927eeac1ae4417371",
-      "hash": "9b7484afce706bc15ceaba7f37b3f89ff59240f07861656bcf8020c0d04ff844"
+      "tag": "v0.4.1",
+      "commit": "a4ce8b9272543f51858bcb10a10df322709118dc",
+      "hash": "fa0b168f62c5fbdb029c5ae54f605e931673406a2814f95bf0ae992f15a65e82"
     }
   ]
 }

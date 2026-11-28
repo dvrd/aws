@@ -5,7 +5,7 @@
 ## Prerequisites
 
 - The Odin fork at `~/dev/oss/Odin`. Check: `odin version`. `ODIN_COMMIT` records the fork commit the suites are tested with; `task deps` reports drift from the pins.
-- `krs`, with the packages pinned in `.krs/packages.json` (`async`, `surf`, `websocket`) installed or linked into the shared collection. Check: `krs --version`, then `task deps`. Use `krs install`, `krs update <pkg>@<tag>` and `krs link <pkg>`; never edit the shared collection by hand.
+- `krs`, with the packages pinned in `.krs/packages.json` (`async`, `surf`) installed or linked into the shared collection. Check: `krs --version`, then `task deps`. Use `krs install`, `krs update <pkg>@<tag>` and `krs link <pkg>`; never edit the shared collection by hand.
 - `openssl` on `PATH`: `cmd/tasks/signatures.odin` runs `openssl dgst` to check SigV4 signatures independently. Check: `openssl version`.
 - For the sanitized tasks (`test:credentials`, `test:loopback`, `test:native-errors`), a clang whose major version equals Odin's LLVM backend. Check: `odin report | grep LLVM`, then install `llvm@<N>`. `sanitizer_clang_select` in `cmd/tasks/common.odin` looks in `/opt/homebrew/opt/llvm@<N>/bin/clang`, `/usr/local/opt/llvm@<N>/bin/clang` and `/usr/lib/llvm-<N>/bin/clang`. If neither a versioned clang nor the system clang matches the `Backend: LLVM` major and no `ODIN_CLANG_PATH` is set, the task stops with `need clang <N>`.
 

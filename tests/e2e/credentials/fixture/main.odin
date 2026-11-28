@@ -8,7 +8,7 @@ import surf "shared:surf"
 
 mode: string
 calls: int
-metadata :: proc(request: aws.HTTP_Request) -> ([]u8, surf.Buffered_HTTP_Result) {
+metadata :: proc(request: aws.HTTP_Request) -> ([]u8, aws.HTTP_Result) {
 	assert(
 		request.allow_http && request.timeout_ms == 1500 && request.ca_file == "" && len(request.body) == 0 && request.upload_file == nil && request.upload_size == 0,
 	)
